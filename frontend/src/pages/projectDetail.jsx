@@ -36,20 +36,16 @@ import ExpandMoreRoundedIcon from "@mui/icons-material/ExpandMoreRounded";
 import SendRoundedIcon from "@mui/icons-material/SendRounded";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
-import { useAuth } from "../AuthContext.jsx";
-
 const IMPLEMENTATION_STATUSES = [
   { value: "planned", label: "Planned", color: "#8B5CF6" },
   { value: "in_progress", label: "In Progress", color: "#FACC15" },
   { value: "implemented", label: "Implemented", color: "#22C55E" },
 ];
-
 function createEqualAllocation(features) {
   return Object.fromEntries(
     features.map((feature) => [feature.id, 0])
   );
 }
-
 function distributeUntouched(state, activeFeatures) {
   const activeIds = new Set(activeFeatures.map((feature) => feature.id));
   const pinnedIds = new Set([...state.pinnedIds].filter((featureId) => activeIds.has(featureId)));
@@ -59,7 +55,6 @@ function distributeUntouched(state, activeFeatures) {
   const pinnedTotal = [...pinnedIds].reduce((sum, featureId) => sum + values[featureId], 0);
   const untouched = activeFeatures.filter((feature) => !pinnedIds.has(feature.id));
   if (!untouched.length) return { values, pinnedIds };
-
   const available = Math.max(0, 100 - pinnedTotal);
   const base = Math.floor(available / untouched.length);
   let remainder = available - base * untouched.length;
@@ -69,19 +64,15 @@ function distributeUntouched(state, activeFeatures) {
   });
   return { values, pinnedIds };
 }
-
 function formatStartDate(value) {
   if (!value) return null;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(date);
 }
-
 export default function ProjectDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
-  const isAdmin = Boolean(user?.is_admin || user?.roles?.includes("Admin"));
   const [project, setProject] = useState(null);
   const [features, setFeatures] = useState([]);
   const [allocation, setAllocation] = useState({ values: {}, pinnedIds: new Set() });
@@ -103,7 +94,6 @@ export default function ProjectDetail() {
   const pendingRef = useRef(false);
   const submitRef = useRef(false);
 
-
   const activeFeatures = useMemo(
     () => features.filter((feature) => feature.status !== "implemented"),
     [features],
@@ -124,7 +114,6 @@ const activeTotal = useMemo(
   const remaining = 100 - activeTotal;
   const requestKey = `${id}:${retryKey}`;
   const isLoading = loadedFor !== requestKey;
-
   useEffect(() => {
     const controller = new AbortController();
     let current = true;
@@ -150,7 +139,6 @@ const activeTotal = useMemo(
       controller.abort();
     };
   }, [id, retryKey, requestKey]);
-
   const runMutation = async (key, operation, onSuccess) => {
     if (pendingRef.current || submitRef.current) return;
     pendingRef.current = true;
@@ -166,13 +154,11 @@ const activeTotal = useMemo(
       setPendingAction("");
     }
   };
-
   const reconcile = (nextFeatures, current) =>
     distributeUntouched(
       current,
       nextFeatures.filter((feature) => feature.status !== "implemented"),
     );
-
   const addFeature = async (event) => {
     event?.preventDefault();
     const name = featureName.trim();
@@ -189,13 +175,11 @@ const activeTotal = useMemo(
       },
     );
   };
-
   const openEditor = (feature) => {
     setEditingFeature(feature);
     setEditName(feature.name);
     setEditDescription(feature.description || "");
   };
-
   const saveFeature = async (event) => {
     event?.preventDefault();
     if (!editingFeature || !editName.trim() || pendingRef.current) return;
@@ -210,10 +194,8 @@ const activeTotal = useMemo(
       },
     );
   };
-
 const updateStatus = async (feature, status) => {
   if (pendingRef.current || status === feature.status) return;
-
   await runMutation(
     `status-${feature.id}`,
     () => api.updateFeature(id, feature.id, { status }),
@@ -223,12 +205,10 @@ const updateStatus = async (feature, status) => {
           item.id === updated.id ? updated : item
         )
       );
-
    
     },
   );
 };
-
   const removeFeature = async () => {
     if (!deleteTarget || pendingRef.current) return;
     await runMutation(
@@ -242,7 +222,6 @@ const updateStatus = async (feature, status) => {
       },
     );
   };
-
   const updatePercentage = (featureId, rawValue) => {
     const numericValue = Array.isArray(rawValue) ? rawValue[0] : rawValue;
     setAllocation((current) => {
@@ -260,7 +239,6 @@ const updateStatus = async (feature, status) => {
       );
     });
   };
-
   const applyEvenSplit = () => {
    setAllocation({
   values: createEqualAllocation(
@@ -268,17 +246,14 @@ const updateStatus = async (feature, status) => {
   ),
   pinnedIds: new Set()
 });
-
     setConfirmReset(false);
   };
-
   const resetAllocation = () => {
     const equal = createEqualAllocation(activeFeatures);
     const changed = activeFeatures.some((feature) => Number(allocation.values[feature.id] || 0) !== equal[feature.id]) || allocation.pinnedIds.size > 0;
     if (changed) setConfirmReset(true);
     else applyEvenSplit();
   };
-
   const submitPrioritization = async () => {
     if (activeFeatures.length < 2) {
       setError("Add at least 2 active features to submit.");
@@ -289,11 +264,9 @@ const updateStatus = async (feature, status) => {
       return;
     }
     if (submitting || submitRef.current || pendingRef.current) return;
-
     const allocations = activeFeatures
       .filter((feature) => Number(allocation.values[feature.id] || 0) > 0)
       .map((feature) => ({ featureId: feature.id, percentage: Number(allocation.values[feature.id]) }));
-
     try {
       submitRef.current = true;
       setSubmitting(true);
@@ -307,11 +280,9 @@ const updateStatus = async (feature, status) => {
       setSubmitting(false);
     }
   };
-
   function stakeholderTrimmed() {
     return stakeholder.trim() || "Anonymous";
   }
-
   if (isLoading) {
     return (
       <Box sx={{ pt: 5 }} aria-label="Loading project">
@@ -320,7 +291,6 @@ const updateStatus = async (feature, status) => {
       </Box>
     );
   }
-
   if (!project) {
     return (
       <Box sx={{ pt: 5 }}>
@@ -331,7 +301,6 @@ const updateStatus = async (feature, status) => {
       </Box>
     );
   }
-
   const renderFeature = (feature, implemented = false) => {
     const value = Number(allocation.values[feature.id] || 0);
     const startDate = formatStartDate(feature.implementation_started_at);
@@ -347,7 +316,6 @@ const updateStatus = async (feature, status) => {
           </Box>
           <Stack direction={{ xs: "column", sm: "row" }} spacing={{ xs: 0.75, sm: 1 }} sx={{ width: { xs: "100%", sm: "auto" }, minWidth: 0, alignItems: { xs: "stretch", sm: "center" } }}>
             <Stack direction="row" spacing={1} sx={{ alignItems: "center", minWidth: 0 }}>
-        {isAdmin ? (
         <Box>
   <Button
     onClick={(event) => {
@@ -411,12 +379,10 @@ const updateStatus = async (feature, status) => {
               : "#8B5CF6",
       }}
     />
-
     {IMPLEMENTATION_STATUSES.find(
       (item) => item.value === feature.status
     )?.label || "Planned"}
   </Button>
-
   <Popover
     open={Boolean(statusAnchor) && selectedStatusFeature?.id === feature.id}
     anchorEl={statusAnchor}
@@ -492,33 +458,23 @@ const updateStatus = async (feature, status) => {
     </Stack>
   </Popover>
 </Box>
-        ) : (
-          <Chip
-            size="small"
-            label={IMPLEMENTATION_STATUSES.find((item) => item.value === feature.status)?.label || "Planned"}
-            variant="outlined"
-            sx={{ minWidth: 110, justifyContent: "flex-start" }}
-          />
-        )}
 
               <Typography component="span" variant="body2" fontWeight={700} sx={{ minWidth: 48, textAlign: "right" }}>
                 {implemented ? "Done" : `${value}%`}
               </Typography>
             </Stack>
-            {isAdmin && (
-              <Stack direction="row" spacing={0.5} sx={{ alignItems: "center", justifyContent: { xs: "flex-end", sm: "flex-start" } }}>
-                <Tooltip title={`Edit ${feature.name}`}>
-                  <IconButton aria-label={`Edit ${feature.name}`} onClick={() => openEditor(feature)} disabled={Boolean(pendingAction) || submitting} sx={{ width: 44, height: 44 }}>
-                    <EditOutlinedIcon />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip title={`Delete ${feature.name}`}>
-                  <IconButton aria-label={`Delete ${feature.name}`} color="error" onClick={() => setDeleteTarget(feature)} disabled={Boolean(pendingAction) || submitting} sx={{ width: 44, height: 44 }}>
-                    <DeleteOutlineRoundedIcon sx={{ color: "inherit" }} />
-                  </IconButton>
-                </Tooltip>
-              </Stack>
-            )}
+            <Stack direction="row" spacing={0.5} sx={{ alignItems: "center", justifyContent: { xs: "flex-end", sm: "flex-start" } }}>
+              <Tooltip title={`Edit ${feature.name}`}>
+                <IconButton aria-label={`Edit ${feature.name}`} onClick={() => openEditor(feature)} disabled={Boolean(pendingAction) || submitting} sx={{ width: 44, height: 44 }}>
+                  <EditOutlinedIcon />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title={`Delete ${feature.name}`}>
+                <IconButton aria-label={`Delete ${feature.name}`} color="error" onClick={() => setDeleteTarget(feature)} disabled={Boolean(pendingAction) || submitting} sx={{ width: 44, height: 44 }}>
+                  <DeleteOutlineRoundedIcon sx={{ color: "inherit" }} />
+                </IconButton>
+              </Tooltip>
+            </Stack>
           </Stack>
         </Stack>
         {!implemented ? (
@@ -539,7 +495,6 @@ const updateStatus = async (feature, status) => {
       </Box>
     );
   };
-
   const submitDisabled = activeFeatures.length < 2 || activeTotal !== 100 || submitting;
   const allocationSummary = (
     <Stack spacing={1.25}>
@@ -558,13 +513,11 @@ const updateStatus = async (feature, status) => {
       ) : (
         <Typography variant="body2" color="text.secondary">Ready to submit.</Typography>
       )}
-
       <Button fullWidth variant="contained" size="large" onClick={submitPrioritization} disabled={submitDisabled} startIcon={<SendRoundedIcon />} sx={{ minHeight: 48 }}>
         {submitting ? "Submitting…" : "Submit prioritization"}
       </Button>
     </Stack>
   );
-
   return (
     <Box sx={{ pb: { xs: 13, md: 7 }, pt: { xs: 3, md: 4 } }}>
       <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ alignItems: { xs: "flex-start", sm: "center" }, justifyContent: "space-between", mb: 3 }}>
@@ -577,9 +530,7 @@ const updateStatus = async (feature, status) => {
           View results
         </Button>
       </Stack>
-
       {error && !editingFeature && !deleteTarget && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError("")}>{error}</Alert>}
-
       <Box sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", md: "minmax(0, 1.7fr) minmax(260px, 0.7fr)" }, gap: { xs: 3, md: 5 }, alignItems: "start" }}>
         <Box component="section" aria-labelledby="prioritize-heading" sx={{ minWidth: 0 }}>
           <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ alignItems: { xs: "flex-start", sm: "center" }, justifyContent: "space-between", mb: 1 }}>
@@ -592,7 +543,6 @@ const updateStatus = async (feature, status) => {
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
             Move a slider to set its percentage. The remaining active features share the remaining points equally.
           </Typography>
-
           <Stack component="form" onSubmit={addFeature} spacing={1.5} sx={{ mb: 2.5 }}>
             <TextField
               fullWidth
@@ -618,7 +568,6 @@ const updateStatus = async (feature, status) => {
               {pendingAction === "add-feature" ? "Adding feature…" : "Add feature"}
             </Button>
           </Stack>
-
           {activeFeatures.length === 0 ? (
             <Box sx={{ py: 4, borderTop: "1px solid", borderColor: "divider" }}>
               <Typography fontWeight={650}>No active features yet</Typography>
@@ -631,7 +580,6 @@ const updateStatus = async (feature, status) => {
               ))}
             </Stack>
           )}
-
           {implementedFeatures.length > 0 && (
             <Accordion
               disableGutters
@@ -649,12 +597,10 @@ const updateStatus = async (feature, status) => {
             </Accordion>
           )}
         </Box>
-
         <Box component="aside" aria-label="Allocation and submission" sx={{ display: { xs: "none", md: "block" }, position: "sticky", top: 24, minWidth: 0, borderTop: "2px solid", borderColor: "primary.main", pt: 2 }}>
           {allocationSummary}
         </Box>
       </Box>
-
       <Box
         component="aside"
         aria-label="Allocation and submit"
@@ -694,7 +640,6 @@ const updateStatus = async (feature, status) => {
           </Typography>
         ) : null}
       </Box>
-
       <Dialog open={Boolean(editingFeature)} onClose={() => !pendingAction && setEditingFeature(null)} fullWidth maxWidth="sm" aria-labelledby="edit-feature-title">
         <Box component="form" onSubmit={saveFeature}>
           <DialogTitle id="edit-feature-title">Edit feature</DialogTitle>
@@ -711,7 +656,6 @@ const updateStatus = async (feature, status) => {
           </DialogActions>
         </Box>
       </Dialog>
-
       <Dialog open={Boolean(deleteTarget)} onClose={() => !pendingAction && setDeleteTarget(null)} fullWidth maxWidth="xs" aria-labelledby="delete-feature-title">
         <DialogTitle id="delete-feature-title">Delete feature?</DialogTitle>
         <DialogContent>
@@ -727,7 +671,6 @@ const updateStatus = async (feature, status) => {
           </Button>
         </DialogActions>
       </Dialog>
-
       <Dialog open={confirmReset} onClose={() => setConfirmReset(false)} fullWidth maxWidth="xs" aria-labelledby="reset-allocation-title">
         <DialogTitle id="reset-allocation-title">Distribute points evenly?</DialogTitle>
         <DialogContent>

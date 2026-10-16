@@ -13,14 +13,10 @@ import LightModeOutlinedIcon from "@mui/icons-material/LightModeOutlined";
 import TuneRoundedIcon from "@mui/icons-material/TuneRounded";
 import { Link, Route, Routes } from "react-router-dom";
 import { ThemeWrapper } from "./theme.jsx";
-import { AuthProvider, useAuth } from "./AuthContext.jsx";
-
 const Home = lazy(() => import("./pages/Home.jsx"));
 const ProjectDetail = lazy(() => import("./pages/projectDetail.jsx"));
 const Results = lazy(() => import("./pages/results.jsx"));
-
 function Shell({ mode, toggle, children }) {
-  const { user, loading } = useAuth();
   return (
     <Box sx={{ minHeight: "100dvh", bgcolor: "background.default" }}>
       <AppBar
@@ -67,20 +63,6 @@ function Shell({ mode, toggle, children }) {
               Features Selector
             </Typography>
           </Stack>
-          {loading ? null : user ? (
-            <>
-              <Typography variant="body2" color="text.secondary" sx={{ mr: 1, display: { xs: "none", sm: "block" } }}>
-                {user.username || user.email} · {user.is_admin ? "Admin" : "User"}
-              </Typography>
-              <Button component="a" href="http://localhost:4180/oauth2/sign_out?rd=http://localhost:5173" size="medium" variant="outlined" sx={{ minHeight: 40, mr: 1, whiteSpace: "nowrap" }}>
-                Sign out
-              </Button>
-            </>
-          ) : (
-            <Button component="a" href="http://localhost:4180/oauth2/sign_in?rd=http://localhost:5173" size="medium" variant="contained" sx={{ minHeight: 40, mr: 1, whiteSpace: "nowrap" }}>
-              Sign in
-            </Button>
-          )}
           <IconButton
             onClick={toggle}
             aria-label={`Switch to ${mode === "light" ? "dark" : "light"} mode`}
@@ -104,7 +86,6 @@ function Shell({ mode, toggle, children }) {
           </IconButton>
         </Toolbar>
       </AppBar>
-
       <Box
         component="main"
         sx={{
@@ -120,7 +101,6 @@ function Shell({ mode, toggle, children }) {
     </Box>
   );
 }
-
 function NotFound() {
   return (
     <Stack sx={{ py: 8, textAlign: "center", alignItems: "center" }} spacing={2}>
@@ -130,10 +110,8 @@ function NotFound() {
     </Stack>
   );
 }
-
 export default function App() {
   return (
-    <AuthProvider>
     <ThemeWrapper>
       {(mode, toggle) => (
         <Shell mode={mode} toggle={toggle}>
@@ -155,10 +133,8 @@ export default function App() {
         </Shell>
       )}
     </ThemeWrapper>
-    </AuthProvider>
   );
 }
-
 
 // import "./App.css";
 // import { lazy, Suspense } from "react";
@@ -176,12 +152,9 @@ export default function App() {
 // import TuneRoundedIcon from "@mui/icons-material/TuneRounded";
 // import { Link, Route, Routes } from "react-router-dom";
 // import { ThemeWrapper } from "./theme.jsx";
-// import { AuthProvider, useAuth } from "./AuthContext.jsx";
-
 // const Home = lazy(() => import("./pages/Home.jsx"));
 // const ProjectDetail = lazy(() => import("./pages/projectDetail.jsx"));
 // const Results = lazy(() => import("./pages/results.jsx"));
-
 // function Shell({ mode, toggle, children }) {
 //   return (
 //     <Box sx={{ minHeight: "100dvh", bgcolor: "background.default" }}>
@@ -261,7 +234,6 @@ export default function App() {
 //           </IconButton>
 //         </Toolbar>
 //       </AppBar>
-
 //       <Box
 //         component="main"
 //         sx={{
@@ -277,7 +249,6 @@ export default function App() {
 //     </Box>
 //   );
 // }
-
 // function NotFound() {
 //   return (
 //     <Stack sx={{ py: 8, textAlign: "center", alignItems: "center" }} spacing={2}>
@@ -287,7 +258,6 @@ export default function App() {
 //     </Stack>
 //   );
 // }
-
 // export default function App() {
 //   return (
 //     <ThemeWrapper>
@@ -313,3 +283,4 @@ export default function App() {
 //     </ThemeWrapper>
 //   );
 // }
+
