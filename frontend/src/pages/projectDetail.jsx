@@ -312,7 +312,7 @@ const updateStatus = async (feature, status) => {
     return stakeholder.trim() || "Anonymous";
   }
 
-  if (isLoading) {
+if (isLoading) {
     return (
       <Box sx={{ pt: 5 }} aria-label="Loading project">
         <Skeleton variant="text" width="42%" height={56} />
@@ -494,12 +494,48 @@ const updateStatus = async (feature, status) => {
 </Box>
         ) : (
           <Chip
-            size="small"
-            label={IMPLEMENTATION_STATUSES.find((item) => item.value === feature.status)?.label || "Planned"}
-            variant="outlined"
-            sx={{ minWidth: 110, justifyContent: "flex-start" }}
-          />
-        )}
+    size="small"
+    label={
+      IMPLEMENTATION_STATUSES.find(
+        (item) => item.value === feature.status
+      )?.label || "Planned"
+    }
+    variant="outlined"
+    sx={{
+      minWidth: 130,
+      minHeight: 38,
+      justifyContent: "flex-start",
+      borderRadius: "9px",
+      fontSize: "0.8rem",
+      fontWeight: 600,
+
+      backgroundColor:
+        feature.status === "in_progress"
+          ? "rgba(250, 204, 21, 0.10)"
+          : feature.status === "implemented"
+            ? "rgba(34, 197, 94, 0.10)"
+            : "rgba(139, 92, 246, 0.10)",
+
+      color:
+        feature.status === "in_progress"
+          ? "#FACC15"
+          : feature.status === "implemented"
+            ? "#22C55E"
+            : "#A78BFA",
+
+      borderColor:
+        feature.status === "in_progress"
+          ? "rgba(250, 204, 21, 0.25)"
+          : feature.status === "implemented"
+            ? "rgba(34, 197, 94, 0.25)"
+            : "rgba(139, 92, 246, 0.25)",
+
+      "& .MuiChip-label": {
+        px: 1.5,
+      },
+    }}
+  />
+)}
 
               <Typography component="span" variant="body2" fontWeight={700} sx={{ minWidth: 48, textAlign: "right" }}>
                 {implemented ? "Done" : `${value}%`}
@@ -559,7 +595,7 @@ const updateStatus = async (feature, status) => {
         <Typography variant="body2" color="text.secondary">Ready to submit.</Typography>
       )}
 
-      <Button fullWidth variant="contained" size="large" onClick={submitPrioritization} disabled={submitDisabled} startIcon={<SendRoundedIcon />} sx={{ minHeight: 48 }}>
+<Button fullWidth variant="contained" size="large" onClick={submitPrioritization} disabled={submitDisabled} startIcon={<SendRoundedIcon />} sx={{ minHeight: 48 }}>
         {submitting ? "Submitting…" : "Submit prioritization"}
       </Button>
     </Stack>
@@ -707,6 +743,7 @@ const updateStatus = async (feature, status) => {
           </DialogContent>
           <DialogActions sx={{ px: 3, pb: 2 }}>
             <Button type="button" onClick={() => setEditingFeature(null)} disabled={Boolean(pendingAction)}>Cancel</Button>
+ <Button type="button" onClick={() => setEditingFeature(null)} disabled={Boolean(pendingAction)}>Cancel</Button>
             <Button type="submit" variant="contained" disabled={!editName.trim() || Boolean(pendingAction)}>{pendingAction.startsWith("edit-") ? "Saving…" : "Save changes"}</Button>
           </DialogActions>
         </Box>

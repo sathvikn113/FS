@@ -77,7 +77,7 @@ function Shell({ mode, toggle, children }) {
               </Button>
             </>
           ) : (
-            <Button component="a" href="http://localhost:4180/oauth2/sign_in?rd=http://localhost:5173" size="medium" variant="contained" sx={{ minHeight: 40, mr: 1, whiteSpace: "nowrap" }}>
+            <Button component="a" href="http://localhost:4180/oauth2/start?rd=http://localhost:5173" size="medium" variant="contained" sx={{ minHeight: 40, mr: 1, whiteSpace: "nowrap" }}>
               Sign in
             </Button>
           )}
