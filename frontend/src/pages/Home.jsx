@@ -1,274 +1,653 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Alert,
   Box,
   Button,
   Card,
-  CardActionArea,
   CardContent,
+  CircularProgress,
+  Container,
   Dialog,
   DialogActions,
   DialogContent,
+  DialogContentText,
   DialogTitle,
+  Grid,
   IconButton,
-  Skeleton,
   Stack,
   TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
-import AddRoundedIcon from "@mui/icons-material/AddRounded";
-import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
-import FolderOpenOutlinedIcon from "@mui/icons-material/FolderOpenOutlined";
+
+import AddIcon from "@mui/icons-material/Add";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
+import FolderOutlinedIcon from "@mui/icons-material/FolderOutlined";
+import ArrowForwardRoundedIcon from "@mui/icons-material/ArrowForwardRounded";
 import { Link } from "react-router-dom";
+
 import { api } from "../api";
 
 export default function Home() {
-  const [projects, setProjects] = useState(null);
+  const [projects, setProjects] = useState([]);
+  const [currentUser, setCurrentUser] = useState(null);
+
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [error, setError] = useState("");
-  const [retryKey, setRetryKey] = useState(0);
+
+  const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [deletingProject, setDeletingProject] = useState(null);
-  const [pendingDelete, setPendingDelete] = useState(false);
-  const creatingRef = useRef(false);
-  const deletingRef = useRef(false);
+  const [deletingProject, setDeletingProject] = useState(false);
 
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  const [pendingDelete, setPendingDelete] = useState(null);
+
+  // Only main_admin can create or delete projects.
+  const isMainAdmin =
+    currentUser?.roles?.includes("main_admin") ?? false;
+
+  // Load public projects and current user independently.
   useEffect(() => {
-    const controller = new AbortController();
-    let current = true;
+    let cancelled = false;
 
-    api.getProjects(controller.signal).then(
-      (data) => {
-        if (!current) return;
-        setProjects(data);
-        setError("");
-      },
-      (err) => {
-        if (!current || controller.signal.aborted) return;
-        setError(err.message);
-        setProjects(null);
-      },
-    );
+    async function loadProjects() {
+      try {
+        const data = await api.getProjects();
+
+        if (!cancelled) {
+          setProjects(Array.isArray(data) ? data : []);
+          setError("");
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(
+            err.message || "Unable to load projects. Please try again."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    async function loadCurrentUser() {
+      try {
+        const user = await api.getCurrentUser();
+
+        if (!cancelled) {
+          setCurrentUser(user);
+        }
+      } catch {
+        if (!cancelled) {
+          setCurrentUser(null);
+        }
+      }
+    }
+
+    loadProjects();
+    loadCurrentUser();
 
     return () => {
-      current = false;
-      controller.abort();
+      cancelled = true;
     };
-  }, [retryKey]);
+  }, []);
 
-  const create = async (event) => {
+  // Create a project.
+  const handleCreateProject = async (event) => {
     event.preventDefault();
+
+    if (!isMainAdmin) {
+      setError("Only a main admin can create projects.");
+      return;
+    }
+
     const trimmedName = name.trim();
-    if (!trimmedName || creatingRef.current) return;
+    const trimmedDescription = description.trim();
+
+    if (!trimmedName) {
+      setError("Please enter a project name.");
+      return;
+    }
+
+    setCreating(true);
+    setError("");
+    setSuccess("");
 
     try {
-      creatingRef.current = true;
-      setCreating(true);
-      setError("");
-      const project = await api.createProject({
+      await api.createProject({
         name: trimmedName,
-        description: description.trim() || null,
+        description: trimmedDescription,
       });
-      setProjects((current) => [project, ...(current || [])]);
+
       setName("");
       setDescription("");
+
+      // Reload the project list after creation.
+      const data = await api.getProjects();
+      setProjects(Array.isArray(data) ? data : []);
+
+      setSuccess("Project created successfully.");
     } catch (err) {
-      setError(err.message);
+      setError(err.message || "Failed to create the project.");
     } finally {
-      creatingRef.current = false;
       setCreating(false);
     }
   };
 
-  const remove = async () => {
-    if (!deletingProject || deletingRef.current) return;
+  // Open the delete confirmation dialog.
+  const handleDeleteClick = (event, project) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (!isMainAdmin) {
+      setError("Only a main admin can delete projects.");
+      return;
+    }
+
+    setPendingDelete(project);
+  };
+
+  // Delete the selected project after confirmation.
+  const handleConfirmDelete = async () => {
+    if (!pendingDelete || !isMainAdmin) {
+      return;
+    }
+
+    setDeletingProject(true);
+    setError("");
+    setSuccess("");
+
     try {
-      deletingRef.current = true;
-      setPendingDelete(true);
-      setError("");
-      await api.deleteProject(deletingProject.id);
-      setProjects((current) => current?.filter((project) => project.id !== deletingProject.id) ?? []);
-      setDeletingProject(null);
+      await api.deleteProject(pendingDelete.id);
+
+      setProjects((previous) =>
+        previous.filter(
+          (project) => project.id !== pendingDelete.id
+        )
+      );
+
+      setSuccess(
+        `Project "${pendingDelete.name}" deleted successfully.`
+      );
+
+      setPendingDelete(null);
     } catch (err) {
-      setError(err.message);
+      setError(err.message || "Failed to delete the project.");
     } finally {
-      deletingRef.current = false;
-      setPendingDelete(false);
+      setDeletingProject(false);
     }
   };
 
   return (
-    <Box sx={{ pb: 8, pt: { xs: 4, md: 6 } }}>
-      <Stack
-        direction={{ xs: "column", sm: "row" }}
-        spacing={2}
-        sx={{ alignItems: { xs: "flex-start", sm: "flex-end" }, justifyContent: "space-between", mb: 4 }}
+    <Container
+      maxWidth={false}
+      sx={{
+        maxWidth: 1440,
+        mx: "auto",
+        px: { xs: 2, sm: 4, md: 6 },
+        py: { xs: 3, md: 5 },
+      }}
+    >
+      {/* Page heading */}
+      <Box
+        sx={{
+          mb: { xs: 4, md: 5 },
+          pb: { xs: 3, md: 4 },
+          borderBottom: "1px solid",
+          borderColor: "divider",
+        }}
       >
-        <Box>
-          <Typography component="h1" variant="h3" sx={{ mb: 0.75, fontSize: { xs: "2rem", sm: "2.5rem" } }}>
-            Explore projects
-          </Typography>
-          <Typography color="text.secondary" sx={{ fontSize: "1.05rem", maxWidth: 640 }}>
-            Browse applications, compare feature priorities, and see what your team should build next.
-          </Typography>
-        </Box>
-      </Stack>
+        <Typography
+          component="h1"
+          variant="h3"
+          fontWeight={800}
+          sx={{
+            fontSize: { xs: "2rem", sm: "2.4rem", md: "2.75rem" },
+            letterSpacing: "-0.04em",
+            lineHeight: 1.2,
+            mb: 1.5,
+          }}
+        >
+          Feature Prioritizer
+        </Typography>
 
-      {error && projects !== null && !deletingProject && (
-        <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError("")}>
+        <Typography
+          variant="body1"
+          color="text.secondary"
+          sx={{
+            maxWidth: 650,
+            lineHeight: 1.8,
+          }}
+        >
+          Explore projects, review features, and prioritize what matters.
+        </Typography>
+
+        {currentUser && (
+          <Stack
+            direction="row"
+            spacing={1}
+            alignItems="center"
+            sx={{ mt: 2, flexWrap: "wrap" }}
+          >
+            <Box
+              sx={{
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                bgcolor: "success.main",
+              }}
+            />
+
+            <Typography variant="body2" color="text.secondary">
+              Role:{" "}
+              {currentUser.roles?.length
+                ? currentUser.roles.join(", ")
+                : "Authenticated user"}
+            </Typography>
+          </Stack>
+        )}
+      </Box>
+
+      {/* Error and success messages */}
+      {error && (
+        <Alert
+          severity="error"
+          onClose={() => setError("")}
+          sx={{ mb: 2.5, borderRadius: 2 }}
+        >
           {error}
         </Alert>
       )}
-{/* 
-      <Card component="section" variant="outlined" sx={{ mb: 4, borderRadius: 3, boxShadow: "0 8px 28px rgba(20, 40, 28, 0.04)" }}>
-        <CardContent sx={{ p: { xs: 2.25, md: 3 } }}>
-          <Typography component="h2" variant="h6" sx={{ mb: 0.5 }}>
-            Create a project
-          </Typography>
-          <Typography color="text.secondary" sx={{ mb: 2.5 }}>
-            Give your project a name. Add a description if useful.
-          </Typography>
-          <Stack component="form" onSubmit={create} spacing={2}>
-            <TextField
-              fullWidth
-              required
-              label="Project name"
-              placeholder=""
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              slotProps={{ htmlInput: { maxLength: 255 } }}
-            />
-            <TextField
-              fullWidth
-              label="Project description (optional)"
-              placeholder="What is this project about?"
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              multiline
-              minRows={2}
-              slotProps={{ htmlInput: { maxLength: 5000 } }}
-            />
-            <Button
-              type="submit"
-              variant="contained"
-              startIcon={<AddRoundedIcon />}
-              disabled={!name.trim() || creating}
-              sx={{ alignSelf: { xs: "stretch", sm: "flex-end" }, minHeight: 44, minWidth: 170 }}
-            >
-              {creating ? "Creating project…" : "Create project"}
-            </Button>
-          </Stack>
-        </CardContent>
-      </Card> */}
 
-      <Stack direction="row" spacing={1.25} sx={{ alignItems: "baseline", mb: 1.5 }}>
-        <Typography component="h2" variant="h5">Project list</Typography>
-        {projects && <Typography color="text.secondary">{projects.length}</Typography>}
-      </Stack>
-
-      {projects === null ? (
-        error ? (
-          <Card variant="outlined" sx={{ p: { xs: 3, md: 4 } }}>
-            <Typography fontWeight={600}>Projects couldn’t be loaded.</Typography>
-            <Typography color="text.secondary" sx={{ mt: 0.5 }}>
-              Check the connection and retry. Your projects have not been cleared.
-            </Typography>
-            <Button onClick={() => { setError(""); setRetryKey((key) => key + 1); }} sx={{ mt: 1 }}>
-              Retry loading projects
-            </Button>
-          </Card>
-        ) : (
-          <Stack spacing={1.25} aria-label="Loading projects">
-            {[0, 1, 2].map((item) => (
-              <Skeleton key={item} variant="rounded" height={82} />
-            ))}
-          </Stack>
-        )
-      ) : projects.length === 0 ? (
-        <Card variant="outlined" sx={{ p: { xs: 3, md: 4 } }}>
-          <Stack direction="row" spacing={2} sx={{ alignItems: "flex-start" }}>
-            <FolderOpenOutlinedIcon sx={{ color: "text.secondary", mt: 0.25 }} />
-            <Box>
-              <Typography fontWeight={600}>No projects yet</Typography>
-              <Typography color="text.secondary" sx={{ mt: 0.5 }}>
-                Create a project above, then add at least two active features to collect priorities.
-              </Typography>
-            </Box>
-          </Stack>
-        </Card>
-      ) : (
-        <Stack component="ul" spacing={0} sx={{ m: 0, p: 0, listStyle: "none", borderTop: "1px solid", borderColor: "divider" }}>
-          {projects.map((project) => (
-            <Box component="li" key={project.id} sx={{ borderBottom: "1px solid", borderColor: "divider", transition: "background-color 160ms ease", "&:hover": { bgcolor: "action.hover" } }}>
-              <Stack direction="row" spacing={1} sx={{ alignItems: "stretch" }}>
-                <CardActionArea
-                  component={Link}
-                  to={`/project/${project.id}`}
-                  aria-label={`Open project ${project.name}`}
-                  sx={{
-                    flex: 1,
-                    minWidth: 0,
-                    px: { xs: 1.5, sm: 2 },
-                    py: 2,
-                    borderRadius: "10px",
-                    "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: -2 },
-                  }}
-                >
-                  <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
-                    <FolderOpenOutlinedIcon sx={{ color: "primary.main", flexShrink: 0 }} />
-                    <Box sx={{ flex: 1, minWidth: 0 }}>
-                      <Typography component="span" fontWeight={650} sx={{ display: "block", overflowWrap: "anywhere" }}>
-                        {project.name}
-                      </Typography>
-                      {project.description && (
-                        <Typography component="span" variant="body2" color="text.secondary" sx={{ display: "block", overflowWrap: "anywhere" }}>
-                          {project.description}
-                        </Typography>
-                      )}
-                    </Box>
-                    <Typography color="primary.main" aria-hidden="true" sx={{ pr: 1 }}>Open</Typography>
-                  </Stack>
-                </CardActionArea>
-                <Tooltip title={`Delete ${project.name}`}>
-                  <IconButton
-                    aria-label={`Delete project ${project.name}`}
-                    color="error"
-                    onClick={() => setDeletingProject(project)}
-                    sx={{ alignSelf: "center", width: 44, height: 44, flexShrink: 0 }}
-                  >
-                    <DeleteOutlineRoundedIcon sx={{ color: "inherit" }} />
-                  </IconButton>
-                </Tooltip>
-              </Stack>
-            </Box>
-          ))}
-        </Stack>
+      {success && (
+        <Alert
+          severity="success"
+          onClose={() => setSuccess("")}
+          sx={{ mb: 2.5, borderRadius: 2 }}
+        >
+          {success}
+        </Alert>
       )}
 
+      {/* Create Project: main_admin only */}
+      {isMainAdmin && (
+        <Card
+          elevation={0}
+          sx={{
+            mb: { xs: 4, md: 5 },
+            border: "1px solid",
+            borderColor: "divider",
+            borderRadius: 3,
+            backgroundImage: "none",
+          }}
+        >
+          <CardContent
+            sx={{
+              p: { xs: 2.5, sm: 3.5 },
+              "&:last-child": { pb: { xs: 2.5, sm: 3.5 } },
+            }}
+          >
+            <Stack
+              direction="row"
+              alignItems="center"
+              spacing={1.5}
+              sx={{ mb: 3 }}
+            >
+              <Box
+                sx={{
+                  width: 42,
+                  height: 42,
+                  borderRadius: 2,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  bgcolor: "action.hover",
+                  color: "primary.main",
+                }}
+              >
+                <AddIcon />
+              </Box>
+
+              <Box>
+                <Typography variant="h6" fontWeight={700}>
+                  Create a project
+                </Typography>
+
+                <Typography variant="body2" color="text.secondary">
+                  Add a project for your team to prioritize.
+                </Typography>
+              </Box>
+            </Stack>
+
+            <Box component="form" onSubmit={handleCreateProject}>
+              <Stack spacing={2}>
+                <TextField
+                  label="Project name"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  required
+                  fullWidth
+                  inputProps={{ maxLength: 150 }}
+                  placeholder="Enter project name"
+                />
+
+                <TextField
+                  label="Description"
+                  value={description}
+                  onChange={(event) =>
+                    setDescription(event.target.value)
+                  }
+                  fullWidth
+                  multiline
+                  minRows={2}
+                  placeholder="Describe the project"
+                />
+
+                <Box>
+                  <Button
+                    type="submit"
+                    variant="contained"
+                    startIcon={<AddIcon />}
+                    disabled={creating || !name.trim()}
+                    sx={{
+                      minHeight: 44,
+                      px: 2.5,
+                      borderRadius: 2,
+                      textTransform: "none",
+                      fontWeight: 650,
+                    }}
+                  >
+                    {creating ? "Creating..." : "Create project"}
+                  </Button>
+                </Box>
+              </Stack>
+            </Box>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Projects heading */}
+      <Box sx={{ mb: 3 }}>
+        <Typography
+          component="h2"
+          variant="h5"
+          fontWeight={750}
+          sx={{ letterSpacing: "-0.02em" }}
+        >
+          Projects
+        </Typography>
+
+        <Typography
+          variant="body2"
+          color="text.secondary"
+          sx={{ mt: 0.75, lineHeight: 1.7 }}
+        >
+          Select a project to view its features and prioritization results.
+        </Typography>
+      </Box>
+
+      {/* Loading state */}
+      {loading ? (
+        <Box
+          sx={{
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+            py: 10,
+          }}
+        >
+          <CircularProgress />
+        </Box>
+      ) : projects.length === 0 ? (
+        /* Empty state */
+        <Card
+          elevation={0}
+          sx={{
+            border: "1px dashed",
+            borderColor: "divider",
+            borderRadius: 3,
+            backgroundImage: "none",
+          }}
+        >
+          <CardContent sx={{ py: 8, textAlign: "center" }}>
+            <Box
+              sx={{
+                width: 64,
+                height: 64,
+                borderRadius: 3,
+                bgcolor: "action.hover",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                mx: "auto",
+                mb: 2,
+              }}
+            >
+              <FolderOutlinedIcon
+                sx={{ fontSize: 32, color: "text.secondary" }}
+              />
+            </Box>
+
+            <Typography variant="h6" fontWeight={700}>
+              No projects found
+            </Typography>
+
+            <Typography
+              color="text.secondary"
+              sx={{ mt: 1, maxWidth: 420, mx: "auto" }}
+            >
+              {isMainAdmin
+                ? "Create your first project using the form above."
+                : "There are currently no projects to display."}
+            </Typography>
+          </CardContent>
+        </Card>
+      ) : (
+        /* Project cards */
+        <Grid container spacing={{ xs: 2, md: 3 }}>
+          {projects.map((project) => (
+            <Grid
+              item
+              xs={12}
+              sm={6}
+              md={4}
+              key={project.id}
+              sx={{ display: "flex" }}
+            >
+              <Card
+                component={Link}
+                to={`/project/${project.id}`}
+                elevation={0}
+                sx={{
+                  display: "flex",
+                  flexDirection: "column",
+                  width: "100%",
+                  minHeight: 220,
+                  color: "inherit",
+                  textDecoration: "none",
+                  border: "1px solid",
+                  borderColor: "divider",
+                  borderRadius: 3,
+                  backgroundImage: "none",
+                  transition:
+                    "transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease",
+                  "&:hover": {
+                    transform: "translateY(-4px)",
+                    boxShadow: 4,
+                    borderColor: "primary.main",
+                  },
+                  "&:focus-visible": {
+                    outline: "2px solid",
+                    outlineColor: "primary.main",
+                    outlineOffset: 3,
+                  },
+                }}
+              >
+                <CardContent
+                  sx={{
+                    p: { xs: 2.5, sm: 3 },
+                    flexGrow: 1,
+                    display: "flex",
+                    flexDirection: "column",
+                    "&:last-child": { pb: { xs: 2.5, sm: 3 } },
+                  }}
+                >
+                  <Stack
+                    direction="row"
+                    alignItems="flex-start"
+                    spacing={2}
+                  >
+                    <Box
+                      sx={{
+                        width: 48,
+                        height: 48,
+                        borderRadius: 2.5,
+                        bgcolor: "action.hover",
+                        border: "1px solid",
+                        borderColor: "divider",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <FolderOutlinedIcon
+                        sx={{ fontSize: 24, color: "primary.main" }}
+                      />
+                    </Box>
+
+                    <Box sx={{ flexGrow: 1, minWidth: 0, pt: 0.25 }}>
+                      <Typography
+                        component="h3"
+                        variant="h6"
+                        fontWeight={750}
+                        sx={{
+                          fontSize: { xs: "1.05rem", md: "1.15rem" },
+                          overflowWrap: "anywhere",
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        {project.name}
+                      </Typography>
+
+                      <Typography
+                        variant="body2"
+                        color="text.secondary"
+                        sx={{
+                          mt: 1,
+                          lineHeight: 1.7,
+                          whiteSpace: "pre-wrap",
+                          overflowWrap: "anywhere",
+                        }}
+                      >
+                        {project.description || "No description provided."}
+                      </Typography>
+                    </Box>
+
+                    {/* Delete button: main_admin only */}
+                    {isMainAdmin && (
+                      <IconButton
+                        aria-label={`Delete ${project.name}`}
+                        color="error"
+                        size="small"
+                        disabled={deletingProject}
+                        onClick={(event) =>
+                          handleDeleteClick(event, project)
+                        }
+                        sx={{
+                          flexShrink: 0,
+                          width: 40,
+                          height: 40,
+                        }}
+                      >
+                        <DeleteOutlineIcon />
+                      </IconButton>
+                    )}
+                  </Stack>
+
+                  <Stack
+                    direction="row"
+                    alignItems="center"
+                    spacing={0.75}
+                    sx={{
+                      mt: "auto",
+                      pt: 3,
+                      color: "primary.main",
+                    }}
+                  >
+                    <Typography
+                      variant="body2"
+                      fontWeight={700}
+                    >
+                      View project
+                    </Typography>
+
+                    <ArrowForwardRoundedIcon
+                      sx={{
+                        fontSize: 18,
+                        transition: "transform 180ms ease",
+                        ".MuiCard-root:hover &": {
+                          transform: "translateX(3px)",
+                        },
+                      }}
+                    />
+                  </Stack>
+                </CardContent>
+              </Card>
+            </Grid>
+          ))}
+        </Grid>
+      )}
+
+      {/* Delete confirmation dialog */}
       <Dialog
-        open={Boolean(deletingProject)}
-        onClose={() => !pendingDelete && setDeletingProject(null)}
+        open={Boolean(pendingDelete)}
+        onClose={() => {
+          if (!deletingProject) {
+            setPendingDelete(null);
+          }
+        }}
         aria-labelledby="delete-project-title"
-        aria-describedby="delete-project-description"
         fullWidth
         maxWidth="xs"
       >
-        <DialogTitle id="delete-project-title">Delete project?</DialogTitle>
+        <DialogTitle id="delete-project-title" fontWeight={750}>
+          Delete project?
+        </DialogTitle>
+
         <DialogContent>
-          {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-          <Typography id="delete-project-description" color="text.secondary">
-            Delete “{deletingProject?.name}” and all its features and responses? This cannot be undone.
-          </Typography>
+          <DialogContentText>
+            Are you sure you want to delete{" "}
+            <strong>{pendingDelete?.name}</strong>? This action may also
+            remove associated project data and cannot necessarily be undone.
+          </DialogContentText>
         </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={() => setDeletingProject(null)} disabled={pendingDelete}>Cancel</Button>
-          <Button onClick={remove} color="error" variant="contained" disabled={pendingDelete}>
-            {pendingDelete ? "Deleting…" : "Delete project"}
+
+        <DialogActions sx={{ p: 2.5, pt: 1 }}>
+          <Button
+            onClick={() => setPendingDelete(null)}
+            disabled={deletingProject}
+            sx={{ textTransform: "none" }}
+          >
+            Cancel
+          </Button>
+
+          <Button
+            onClick={handleConfirmDelete}
+            color="error"
+            variant="contained"
+            disabled={deletingProject}
+            sx={{
+              minWidth: 100,
+              textTransform: "none",
+            }}
+          >
+            {deletingProject ? "Deleting..." : "Delete"}
           </Button>
         </DialogActions>
       </Dialog>
-    </Box>
+    </Container>
   );
 }

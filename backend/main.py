@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from database import engine, get_db
+
 from models import (
     Allocation,
     Base,
@@ -24,16 +25,16 @@ from models import (
 )
 
 
-# --------------------------------------------------
+# ==================================================
 # DATABASE
-# --------------------------------------------------
+# ==================================================
 
 Base.metadata.create_all(bind=engine)
 
 
-# --------------------------------------------------
+# ==================================================
 # AUTHENTICATION CONFIGURATION
-# --------------------------------------------------
+# ==================================================
 
 OAUTH2_PROXY_AUTH_URL = os.getenv(
     "OAUTH2_PROXY_AUTH_URL",
@@ -45,8 +46,6 @@ KEYCLOAK_ISSUER_URL = os.getenv(
     "http://localhost:8081/realms/test-realm",
 )
 
-# Your latest token output showed:
-# Token client: Features_Selector
 KEYCLOAK_CLIENT_ID = os.getenv(
     "KEYCLOAK_CLIENT_ID",
     "Features_Selector",
@@ -63,9 +62,9 @@ _jwks_client = PyJWKClient(
 )
 
 
-# --------------------------------------------------
+# ==================================================
 # FASTAPI APPLICATION
-# --------------------------------------------------
+# ==================================================
 
 app = FastAPI(title="Feature Prioritizer API")
 
@@ -80,20 +79,11 @@ app.add_middleware(
 )
 
 
-# --------------------------------------------------
-# AUTHENTICATION: GET CURRENT USER
-# --------------------------------------------------
+# ==================================================
+# AUTHENTICATION
+# ==================================================
 
 def get_current_user(request: Request) -> dict:
-    """
-    Authenticate the browser's OAuth2 Proxy session.
-
-    1. Read the browser session cookie.
-    2. Ask OAuth2 Proxy to validate the session.
-    3. Obtain the access token from OAuth2 Proxy.
-    4. Validate the JWT signature, issuer, and expiry.
-    5. Extract application roles from Keycloak claims.
-    """
 
     cookie_header = request.headers.get("cookie")
 
@@ -103,7 +93,7 @@ def get_current_user(request: Request) -> dict:
             detail="Sign in required",
         )
 
-    # Ask OAuth2 Proxy to validate the browser session.
+    # Validate session using OAuth2 Proxy.
     try:
         auth_response = httpx.get(
             OAUTH2_PROXY_AUTH_URL,
@@ -117,22 +107,15 @@ def get_current_user(request: Request) -> dict:
     except httpx.HTTPError as exc:
         raise HTTPException(
             status_code=503,
-            detail=(
-                "Authentication service is unavailable. "
-                "Check that OAuth2 Proxy is running."
-            ),
+            detail="OAuth2 Proxy authentication service unavailable",
         ) from exc
 
     if not auth_response.is_success:
         raise HTTPException(
             status_code=401,
-            detail=(
-                "Your session is missing or expired. "
-                "Please sign in again."
-            ),
+            detail="Session expired or invalid. Please sign in again.",
         )
 
-    # OAuth2 Proxy must pass the access token.
     access_token = auth_response.headers.get(
         "X-Auth-Request-Access-Token"
     )
@@ -142,11 +125,11 @@ def get_current_user(request: Request) -> dict:
             status_code=503,
             detail=(
                 "OAuth2 Proxy did not return an access token. "
-                "Enable pass_access_token and set_xauthrequest."
+                "Check pass_access_token and set_xauthrequest."
             ),
         )
 
-    # Validate the JWT using Keycloak's public signing keys.
+    # Validate Keycloak JWT.
     try:
         signing_key = (
             _jwks_client
@@ -165,75 +148,64 @@ def get_current_user(request: Request) -> dict:
         )
 
     except Exception as exc:
-        # Do not bypass token signature, issuer, or expiry validation.
         raise HTTPException(
             status_code=401,
-            detail=(
-                "Could not validate the sign-in token. "
-                "Please sign in again."
-            ),
+            detail="Invalid or expired Keycloak access token",
         ) from exc
 
-    # Validate the token's authorized party when present.
+    # Validate client.
     authorized_party = claims.get("azp")
 
-    if (
-        authorized_party
-        and authorized_party != KEYCLOAK_CLIENT_ID
-    ):
+    if authorized_party != KEYCLOAK_CLIENT_ID:
         raise HTTPException(
             status_code=401,
-            detail=(
-                "The sign-in token was issued to an unexpected client."
-            ),
+            detail="Unexpected Keycloak client",
         )
 
-    # --------------------------------------------------
-    # ROLE EXTRACTION
-    # --------------------------------------------------
-    # Realm roles appear in:
-    # realm_access.roles
-    #
-    # Client roles appear in:
-    # resource_access.<client_id>.roles
-    #
-    # Your current token contains main_admin under:
-    # resource_access.Features_Selector.roles
-
-    realm_access = claims.get("realm_access") or {}
-
-    realm_roles = realm_access.get("roles", [])
+    # ----------------------------------------------
+    # CLIENT ROLES
+    # ----------------------------------------------
 
     resource_access = claims.get("resource_access") or {}
 
     application_access = (
-        resource_access.get("Features_Selector") or {}
+        resource_access.get(KEYCLOAK_CLIENT_ID) or {}
     )
 
-    application_roles = application_access.get("roles", [])
+    application_roles = application_access.get("roles") or []
 
-    # Combine realm roles and Features_Selector client roles.
-    all_roles = set(realm_roles) | set(application_roles)
-
-    # Recognize only the application's intended roles.
     allowed_roles = {
         "main_admin",
+        "app_admin",
         "users",
     }
 
-    roles = sorted(all_roles.intersection(allowed_roles))
+    roles = sorted(
+        set(application_roles).intersection(allowed_roles)
+    )
 
     if not roles:
         raise HTTPException(
             status_code=403,
-            detail=(
-                "Your Keycloak account must have the "
-                "main_admin or users role."
-            ),
+            detail="No valid Features_Selector role assigned",
         )
 
-    # Return the authenticated user.
+    # ----------------------------------------------
+    # KEYCLOAK GROUPS
+    # ----------------------------------------------
+
+    groups = claims.get("groups") or []
+
+    if not isinstance(groups, list) or not all(
+        isinstance(group, str) for group in groups
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Keycloak groups claim",
+        )
+
     return {
+        "id": claims.get("sub"),
         "username": (
             claims.get("preferred_username")
             or claims.get("name")
@@ -241,34 +213,125 @@ def get_current_user(request: Request) -> dict:
         ),
         "email": claims.get("email"),
         "roles": roles,
+        "groups": groups,
         "is_admin": "main_admin" in roles,
+        "is_app_admin": "app_admin" in roles,
     }
 
 
-# --------------------------------------------------
-# ADMIN AUTHORIZATION
-# --------------------------------------------------
+# ==================================================
+# MAIN ADMIN AUTHORIZATION
+# ==================================================
 
-def require_admin(
+def require_main_admin(
     user: dict = Depends(get_current_user),
 ) -> dict:
-    """
-    Only users with the main_admin role may perform
-    administrative feature operations.
-    """
 
     if not user["is_admin"]:
         raise HTTPException(
             status_code=403,
-            detail="Admin role required for this action",
+            detail="main_admin role required",
         )
 
     return user
 
 
-# --------------------------------------------------
-# CURRENT USER ENDPOINT
-# --------------------------------------------------
+# ==================================================
+# PROJECT AUTHORIZATION
+# ==================================================
+
+def can_manage_project(
+    user: dict,
+    project: Project,
+) -> bool:
+    """
+    main_admin:
+        Can manage every project.
+
+    app_admin:
+        Can manage only projects where the user
+        belongs to /<project_name>/app_admin.
+
+    users:
+        Cannot manage existing features.
+    """
+
+    if user["is_admin"]:
+        return True
+
+    if not user["is_app_admin"]:
+        return False
+
+    required_group = f"/{project.name}/app_admin"
+
+    return required_group in user["groups"]
+
+
+def require_project_admin(
+    project_id: str,
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+
+    project = (
+        db.query(Project)
+        .filter(Project.id == project_id)
+        .first()
+    )
+
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail="Project not found",
+        )
+
+    if not can_manage_project(user, project):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "You are not authorized to manage "
+                "features in this project"
+            ),
+        )
+
+    return user
+
+
+# ==================================================
+# HELPERS
+# ==================================================
+
+def clean_optional_text(value: str | None) -> str | None:
+
+    if value is None:
+        return None
+
+    return value.strip() or None
+
+
+def get_project_or_404(
+    db: Session,
+    project_id: str,
+) -> Project:
+
+    project = (
+        db.query(Project)
+        .filter(Project.id == project_id)
+        .first()
+    )
+
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail="Project not found",
+        )
+
+    return project
+
+
+# ==================================================
+# CURRENT USER
+# ==================================================
 
 @app.get("/api/auth/me")
 def get_authenticated_user(
@@ -277,28 +340,16 @@ def get_authenticated_user(
     return user
 
 
-# --------------------------------------------------
-# HELPER FUNCTIONS
-# --------------------------------------------------
-
-def clean_optional_text(
-    value: str | None,
-) -> str | None:
-    if value is None:
-        return None
-
-    return value.strip() or None
-
-
-# --------------------------------------------------
+# ==================================================
 # PROJECT ENDPOINTS
-# --------------------------------------------------
+# ==================================================
 
-# Public: list projects.
+# Public project listing.
 @app.get("/api/projects")
 def list_projects(
     db: Session = Depends(get_db),
 ):
+
     return (
         db.query(Project)
         .order_by(Project.created_at.desc())
@@ -306,13 +357,14 @@ def list_projects(
     )
 
 
-# Authenticated users: create projects.
+# Only main_admin can create projects.
 @app.post("/api/projects", status_code=201)
 def create_project(
     body: ProjectIn,
-    user: dict = Depends(get_current_user),
+    admin: dict = Depends(require_main_admin),
     db: Session = Depends(get_db),
 ):
+
     project = Project(
         id=new_id(),
         name=body.name,
@@ -326,46 +378,25 @@ def create_project(
     return project
 
 
-# Public: get project details.
+# Public project details.
 @app.get("/api/projects/{project_id}")
 def get_project_detail(
     project_id: str,
     db: Session = Depends(get_db),
 ):
-    project = (
-        db.query(Project)
-        .filter(Project.id == project_id)
-        .first()
-    )
 
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail="Project not found",
-        )
-
-    return project
+    return get_project_or_404(db, project_id)
 
 
-# Authenticated users: delete projects.
-# This preserves the existing endpoint's behavior.
+# Only main_admin can delete projects.
 @app.delete("/api/projects/{project_id}")
 def delete_project(
     project_id: str,
-    user: dict = Depends(get_current_user),
+    admin: dict = Depends(require_main_admin),
     db: Session = Depends(get_db),
 ):
-    project = (
-        db.query(Project)
-        .filter(Project.id == project_id)
-        .first()
-    )
 
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail="Project not found",
-        )
+    project = get_project_or_404(db, project_id)
 
     db.delete(project)
     db.commit()
@@ -373,11 +404,53 @@ def delete_project(
     return {"ok": True}
 
 
-# --------------------------------------------------
-# FEATURE ENDPOINTS
-# --------------------------------------------------
+# ==================================================
+# PROJECT PERMISSIONS
+# ==================================================
 
-# Both main_admin and users can add features.
+@app.get("/api/projects/{project_id}/permissions")
+def get_project_permissions(
+    project_id: str,
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+
+    project = get_project_or_404(db, project_id)
+
+    can_manage = can_manage_project(user, project)
+
+    return {
+        "can_create_project": user["is_admin"],
+        "can_delete_project": user["is_admin"],
+        "can_manage_features": can_manage,
+        "can_add_feature": True,
+        "can_submit_response": True,
+        "can_view_results": True,
+    }
+
+
+# ==================================================
+# FEATURE ENDPOINTS
+# ==================================================
+
+# Public feature listing.
+@app.get("/api/projects/{project_id}/features")
+def list_features(
+    project_id: str,
+    db: Session = Depends(get_db),
+):
+
+    get_project_or_404(db, project_id)
+
+    return (
+        db.query(Feature)
+        .filter(Feature.project_id == project_id)
+        .order_by(Feature.created_at, Feature.id)
+        .all()
+    )
+
+
+# All authenticated users can add features.
 @app.post(
     "/api/projects/{project_id}/features",
     status_code=201,
@@ -388,17 +461,8 @@ def add_feature(
     user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    project = (
-        db.query(Project)
-        .filter(Project.id == project_id)
-        .first()
-    )
 
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail="Project not found",
-        )
+    get_project_or_404(db, project_id)
 
     feature = Feature(
         id=new_id(),
@@ -415,7 +479,7 @@ def add_feature(
     return feature
 
 
-# Only main_admin can edit feature details or status.
+# main_admin or assigned app_admin.
 @app.patch(
     "/api/projects/{project_id}/features/{feature_id}"
 )
@@ -423,9 +487,10 @@ def update_feature(
     project_id: str,
     feature_id: str,
     body: FeatureUpdate,
-    admin: dict = Depends(require_admin),
+    admin: dict = Depends(require_project_admin),
     db: Session = Depends(get_db),
 ):
+
     feature = (
         db.query(Feature)
         .filter(
@@ -461,7 +526,6 @@ def update_feature(
             detail="Feature status cannot be null",
         )
 
-    # Record when implementation starts.
     if (
         changes.get("status") == "in_progress"
         and feature.implementation_started_at is None
@@ -470,8 +534,8 @@ def update_feature(
             timezone.utc
         )
 
-    # Apply permitted changes.
     for field, value in changes.items():
+
         if field == "description":
             value = clean_optional_text(value)
 
@@ -483,16 +547,17 @@ def update_feature(
     return feature
 
 
-# Only main_admin can delete features.
+# main_admin or assigned app_admin.
 @app.delete(
     "/api/projects/{project_id}/features/{feature_id}"
 )
 def delete_feature(
     project_id: str,
     feature_id: str,
-    admin: dict = Depends(require_admin),
+    admin: dict = Depends(require_project_admin),
     db: Session = Depends(get_db),
 ):
+
     feature = (
         db.query(Feature)
         .filter(
@@ -508,8 +573,6 @@ def delete_feature(
             detail="Feature not found",
         )
 
-    # Preserve the existing rule preventing deletion of
-    # features that already have saved allocations.
     has_responses = (
         db.query(Allocation.id)
         .filter(Allocation.feature_id == feature_id)
@@ -533,37 +596,10 @@ def delete_feature(
     return {"ok": True}
 
 
-# Public: list project features.
-@app.get("/api/projects/{project_id}/features")
-def list_features(
-    project_id: str,
-    db: Session = Depends(get_db),
-):
-    project_exists = (
-        db.query(Project.id)
-        .filter(Project.id == project_id)
-        .first()
-    )
+# ==================================================
+# PRIORITIZATION
+# ==================================================
 
-    if not project_exists:
-        raise HTTPException(
-            status_code=404,
-            detail="Project not found",
-        )
-
-    return (
-        db.query(Feature)
-        .filter(Feature.project_id == project_id)
-        .order_by(Feature.created_at, Feature.id)
-        .all()
-    )
-
-
-# --------------------------------------------------
-# PRIORITIZATION / RESPONSE ENDPOINT
-# --------------------------------------------------
-
-# Both main_admin and users can submit allocations.
 @app.post(
     "/api/projects/{project_id}/responses",
     status_code=201,
@@ -574,17 +610,8 @@ def submit_response(
     user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    project = (
-        db.query(Project)
-        .filter(Project.id == project_id)
-        .first()
-    )
 
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail="Project not found",
-        )
+    project = get_project_or_404(db, project_id)
 
     validate_response(body, project.features)
 
@@ -600,6 +627,7 @@ def submit_response(
     db.add(response)
 
     for allocation in body.allocations:
+
         db.add(
             Allocation(
                 id=new_id(),
@@ -614,14 +642,15 @@ def submit_response(
     return {"ok": True}
 
 
-# --------------------------------------------------
+# ==================================================
 # RESPONSE VALIDATION
-# --------------------------------------------------
+# ==================================================
 
 def validate_response(
     body: ResponseIn,
     features: list[Feature],
 ) -> None:
+
     active_features = [
         feature
         for feature in features
@@ -634,7 +663,6 @@ def validate_response(
             detail="Add at least 2 active features before submitting.",
         )
 
-    # All percentages must total exactly 100.
     total = sum(
         allocation.percentage
         for allocation in body.allocations
@@ -646,7 +674,6 @@ def validate_response(
             detail="Percentages must sum to exactly 100",
         )
 
-    # Allocations must reference active features in this project.
     active_feature_ids = {
         feature.id for feature in active_features
     }
@@ -663,7 +690,6 @@ def validate_response(
             ),
         )
 
-    # A feature cannot appear twice in one submission.
     selected_ids = [
         allocation.featureId
         for allocation in body.allocations
@@ -676,27 +702,17 @@ def validate_response(
         )
 
 
-# --------------------------------------------------
-# RESULTS ENDPOINT
-# --------------------------------------------------
+# ==================================================
+# RESULTS
+# ==================================================
 
-# Public: view project results.
 @app.get("/api/projects/{project_id}/results")
 def get_results(
     project_id: str,
     db: Session = Depends(get_db),
 ):
-    project = (
-        db.query(Project)
-        .filter(Project.id == project_id)
-        .first()
-    )
 
-    if not project:
-        raise HTTPException(
-            status_code=404,
-            detail="Project not found",
-        )
+    project = get_project_or_404(db, project_id)
 
     totals = {
         feature.id: 0
@@ -710,12 +726,14 @@ def get_results(
 
     total_points = 0
 
-    # Calculate total allocation points and contributors.
     for response in project.responses:
+
         for allocation in response.allocations:
+
             total_points += allocation.percentage
 
             if allocation.feature_id in totals:
+
                 totals[allocation.feature_id] += (
                     allocation.percentage
                 )
@@ -723,7 +741,6 @@ def get_results(
                 if allocation.percentage > 0:
                     contributors[allocation.feature_id] += 1
 
-    # Rank features by score, then alphabetically.
     ranked = sorted(
         project.features,
         key=lambda feature: (
@@ -735,6 +752,7 @@ def get_results(
     results = []
 
     for rank, feature in enumerate(ranked, start=1):
+
         score = totals[feature.id]
 
         share = (
