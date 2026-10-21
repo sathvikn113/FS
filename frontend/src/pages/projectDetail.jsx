@@ -7,95 +7,31 @@ import {
   Box,
   Button,
   Chip,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
   Divider,
-  IconButton,
   LinearProgress,
-  Popover,
   Skeleton,
-  Slider,
   Stack,
   TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
 
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
 import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import BarChartRoundedIcon from "@mui/icons-material/BarChartRounded";
-import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
-import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import ExpandMoreRoundedIcon from "@mui/icons-material/ExpandMoreRounded";
 import SendRoundedIcon from "@mui/icons-material/SendRounded";
 
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../AuthContext.jsx";
-import FeatureInfo from "../components/FeatureInfo.jsx";
+import FeatureCard from "../components/features/FeatureCard.jsx";
 const IMPLEMENTATION_STATUSES = [
   { value: "planned", label: "Planned", color: "#8B5CF6" },
   { value: "in_progress", label: "In Progress", color: "#FACC15" },
   { value: "implemented", label: "Implemented", color: "#22C55E" },
 ];
-
-function createEqualAllocation(features) {
-  if (!features.length) return {};
-
-  const base = Math.floor(100 / features.length);
-  let remainder = 100 - base * features.length;
-
-  return Object.fromEntries(
-    features.map((feature) => {
-      const value = base + (remainder > 0 ? 1 : 0);
-      remainder -= remainder > 0 ? 1 : 0;
-      return [feature.id, value];
-    })
-  );
-}
-
-function distributeUntouched(state, activeFeatures) {
-  const activeIds = new Set(activeFeatures.map((feature) => feature.id));
-
-  const pinnedIds = new Set(
-    [...state.pinnedIds].filter((featureId) => activeIds.has(featureId))
-  );
-
-  const values = Object.fromEntries(
-    activeFeatures.map((feature) => [
-      feature.id,
-      Math.max(0, Number(state.values[feature.id]) || 0),
-    ])
-  );
-
-  const pinnedTotal = [...pinnedIds].reduce(
-    (sum, featureId) => sum + values[featureId],
-    0
-  );
-
-  const untouched = activeFeatures.filter(
-    (feature) => !pinnedIds.has(feature.id)
-  );
-
-  if (!untouched.length) {
-    return { values, pinnedIds };
-  }
-
-  const available = Math.max(0, 100 - pinnedTotal);
-  const base = Math.floor(available / untouched.length);
-  let remainder = available - base * untouched.length;
-
-  untouched.forEach((feature) => {
-    values[feature.id] = base + (remainder > 0 ? 1 : 0);
-    remainder -= remainder > 0 ? 1 : 0;
-  });
-
-  return { values, pinnedIds };
-}
-
+import { useAllocation,createEqualAllocation } from "../hooks/useAllocation.js";
+import FeatureForm from "../components/features/FeatureForm.jsx";
 function formatStartDate(value) {
   if (!value) return null;
 
@@ -141,7 +77,7 @@ export default function ProjectDetail() {
 
   const [featureName, setFeatureName] = useState("");
   const [featureDescription, setFeatureDescription] = useState("");
-  const [stakeholder, setStakeholder] = useState("");
+  const [stakeholder] = useState("");
 
   const [editingFeature, setEditingFeature] = useState(null);
   const [editName, setEditName] = useState("");
@@ -153,7 +89,7 @@ export default function ProjectDetail() {
 
   const [pendingAction, setPendingAction] = useState("");
   const [deleteTarget, setDeleteTarget] = useState(null);
-  const [confirmReset, setConfirmReset] = useState(false);
+  const [setConfirmReset] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
   const [statusAnchor, setStatusAnchor] = useState(null);
@@ -390,70 +326,16 @@ export default function ProjectDetail() {
     );
   };
 
-  const updatePercentage = (featureId, rawValue) => {
-    if (!canSubmitPrioritization || submitting) return;
-
-    const numericValue = Array.isArray(rawValue)
-      ? rawValue[0]
-      : rawValue;
-
-    setAllocation((current) => {
-      const pinnedOtherTotal = activeFeatures.reduce((sum, feature) => {
-        if (
-          feature.id === featureId ||
-          !current.pinnedIds.has(feature.id)
-        ) {
-          return sum;
-        }
-
-        return sum + Number(current.values[feature.id] || 0);
-      }, 0);
-
-      const maxValue = Math.max(0, 100 - pinnedOtherTotal);
-      const value = Math.max(
-        0,
-        Math.min(maxValue, Number(numericValue) || 0)
-      );
-
-      const pinnedIds = new Set(current.pinnedIds);
-      pinnedIds.add(featureId);
-
-      return distributeUntouched(
-        {
-          values: { ...current.values, [featureId]: value },
-          pinnedIds,
-        },
-        activeFeatures
-      );
-    });
-  };
-
-  const applyEvenSplit = () => {
-    setAllocation({
-      values: createEqualAllocation(activeFeatures),
-      pinnedIds: new Set(),
-    });
-
-    setConfirmReset(false);
-  };
-
-  const resetAllocation = () => {
-    const equal = createEqualAllocation(activeFeatures);
-
-    const changed =
-      activeFeatures.some(
-        (feature) =>
-          Number(allocation.values[feature.id] || 0) !==
-          equal[feature.id]
-      ) || allocation.pinnedIds.size > 0;
-
-    if (changed) {
-      setConfirmReset(true);
-    } else {
-      applyEvenSplit();
-    }
-  };
-
+const {
+  updatePercentage
+} = useAllocation({
+  activeFeatures,
+  allocation,
+  setAllocation,
+  canSubmitPrioritization,
+  submitting,
+  setConfirmReset,
+});
   const submitPrioritization = async () => {
     if (!isAuthenticated) {
   const returnUrl = window.location.href;
@@ -553,264 +435,29 @@ export default function ProjectDetail() {
     );
   }
 
-  const renderFeature = (feature, implemented = false) => {
-    const value = Number(allocation.values[feature.id] || 0);
-    const startDate = formatStartDate(
-      feature.implementation_started_at
-    );
-
-    const currentStatus =
-      IMPLEMENTATION_STATUSES.find(
-        (item) => item.value === feature.status
-      ) || IMPLEMENTATION_STATUSES[0];
-
-    return (
-      <Box key={feature.id} component="article" sx={{ py: 2.25 }}>
-        <Stack
-          direction={{ xs: "column", sm: "row" }}
-          spacing={{ xs: 1.25, sm: 1.75 }}
-          sx={{
-            alignItems: { xs: "stretch", sm: "center" },
-          }}
-        >
-          
-          <FeatureInfo
-          feature={feature}
-          startDate={startDate}
-          />
-
-          <Stack
-            direction={{ xs: "column", sm: "row" }}
-            spacing={{ xs: 0.75, sm: 1 }}
-            sx={{
-              width: { xs: "100%", sm: "auto" },
-              alignItems: { xs: "stretch", sm: "center" },
-            }}
-          >
-            <Stack
-              direction="row"
-              spacing={1}
-              sx={{ alignItems: "center", minWidth: 0 }}
-            >
-              {canManageFeatures ? (
-                <>
-                  <Button
-                    onClick={(event) => {
-                      setStatusAnchor(event.currentTarget);
-                      setSelectedStatusFeature(feature);
-                    }}
-                    disabled={Boolean(pendingAction) || submitting}
-                    sx={{
-                      minWidth: 130,
-                      minHeight: 38,
-                      px: 1.5,
-                      borderRadius: "9px",
-                      textTransform: "none",
-                      justifyContent: "flex-start",
-                      fontSize: "0.8rem",
-                      fontWeight: 600,
-                      boxShadow: "none",
-                      color: currentStatus.color,
-                      backgroundColor: `${currentStatus.color}1A`,
-                      border: "1px solid",
-                      borderColor: `${currentStatus.color}40`,
-                      "&:hover": {
-                        boxShadow: "none",
-                        backgroundColor: `${currentStatus.color}2B`,
-                      },
-                    }}
-                  >
-                    <Box
-                      component="span"
-                      sx={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: "50%",
-                        flexShrink: 0,
-                        mr: 1,
-                        backgroundColor: currentStatus.color,
-                      }}
-                    />
-
-                    {currentStatus.label}
-                  </Button>
-
-                  <Popover
-                    open={
-                      Boolean(statusAnchor) &&
-                      selectedStatusFeature?.id === feature.id
-                    }
-                    anchorEl={statusAnchor}
-                    onClose={() => {
-                      setStatusAnchor(null);
-                      setSelectedStatusFeature(null);
-                    }}
-                    anchorOrigin={{
-                      vertical: "bottom",
-                      horizontal: "left",
-                    }}
-                    transformOrigin={{
-                      vertical: "top",
-                      horizontal: "left",
-                    }}
-                    slotProps={{
-                      paper: {
-                        sx: {
-                          mt: 0.75,
-                          p: 0.75,
-                          borderRadius: "12px",
-                          bgcolor: "#1B211E",
-                          border: "1px solid rgba(255,255,255,0.1)",
-                          boxShadow: "0 8px 28px rgba(0,0,0,0.3)",
-                        },
-                      },
-                    }}
-                  >
-                    <Stack spacing={0.5}>
-                      {IMPLEMENTATION_STATUSES.map((status) => (
-                        <Button
-                          key={status.value}
-                          onClick={async () => {
-                            setStatusAnchor(null);
-                            setSelectedStatusFeature(null);
-                            await updateStatus(feature, status.value);
-                          }}
-                          disabled={
-                            Boolean(pendingAction) ||
-                            submitting ||
-                            feature.status === status.value
-                          }
-                          sx={{
-                            justifyContent: "flex-start",
-                            textTransform: "none",
-                            borderRadius: "8px",
-                            px: 1.5,
-                            py: 1,
-                            minWidth: 145,
-                            color: status.color,
-                            backgroundColor:
-                              feature.status === status.value
-                                ? `${status.color}20`
-                                : "transparent",
-                            "&:hover": {
-                              backgroundColor: `${status.color}20`,
-                            },
-                          }}
-                        >
-                          <Box
-component="span"
-                            sx={{
-                              width: 8,
-                              height: 8,
-                              borderRadius: "50%",
-                              backgroundColor: status.color,
-                              mr: 1,
-                            }}
-                          />
-                          {status.label}
-                        </Button>
-                      ))}
-                    </Stack>
-                  </Popover>
-                </>
-              ) : (
-                <Chip
-                  size="small"
-                  label={currentStatus.label}
-                  variant="outlined"
-                  sx={{
-                    minWidth: 130,
-                    minHeight: 38,
-                    justifyContent: "flex-start",
-                    borderRadius: "9px",
-                    fontSize: "0.8rem",
-                    fontWeight: 600,
-                    backgroundColor: `${currentStatus.color}1A`,
-                    color: currentStatus.color,
-                    borderColor: `${currentStatus.color}40`,
-                    "& .MuiChip-label": { px: 1.5 },
-                  }}
-                />
-              )}
-
-              <Typography
-                component="span"
-                variant="body2"
-                fontWeight={700}
-                sx={{ minWidth: 48, textAlign: "right" }}
-              >
-                {implemented ? "Done" : `${value}%`}
-              </Typography>
-            </Stack>
-
-            {canManageFeatures && (
-              <Stack
-                direction="row"
-                spacing={0.5}
-                sx={{
-                  alignItems: "center",
-                  justifyContent: {
-                    xs: "flex-end",
-                    sm: "flex-start",
-                  },
-                }}
-              >
-                <Tooltip title={`Edit ${feature.name}`}>
-                  <IconButton
-                    aria-label={`Edit ${feature.name}`}
-                    onClick={() => openEditor(feature)}
-                    disabled={Boolean(pendingAction) || submitting}
-                    sx={{ width: 44, height: 44 }}
-                  >
-                    <EditOutlinedIcon />
-                  </IconButton>
-                </Tooltip>
-
-                <Tooltip title={`Delete ${feature.name}`}>
-                  <IconButton
-                    aria-label={`Delete ${feature.name}`}
-                    color="error"
-                    onClick={() => setDeleteTarget(feature)}
-                    disabled={Boolean(pendingAction) || submitting}
-                    sx={{ width: 44, height: 44 }}
-                  >
-                    <DeleteOutlineRoundedIcon />
-                  </IconButton>
-                </Tooltip>
-              </Stack>
-            )}
-          </Stack>
-        </Stack>
-
-        {!implemented ? (
-          <Slider
-            aria-label={`Allocation for ${feature.name}`}
-            aria-valuetext={`${value}% allocation for ${feature.name}`}
-            value={value}
-            min={0}
-            max={100}
-            step={1}
-            onChange={(_, newValue) =>
-              updatePercentage(feature.id, newValue)
-            }
-            disabled={
-              Boolean(pendingAction) ||
-              submitting
-            }
-            sx={{ mt: 0.75, mb: -0.5, color: "primary.main" }}
-          />
-        ) : (
-          <Typography
-            variant="body2"
-            color="text.secondary"
-            sx={{ mt: 0.75 }}
-          >
-            This feature is excluded from new allocations.
-          </Typography>
-        )}
-      </Box>
-    );
-  };
+const renderFeature = (feature, implemented = false) => {
+  return (
+    <FeatureCard
+      key={feature.id}
+      feature={feature}
+      implemented={implemented}
+      allocation={allocation}
+      formatStartDate={formatStartDate}
+      IMPLEMENTATION_STATUSES={IMPLEMENTATION_STATUSES}
+      canManageFeatures={canManageFeatures}
+      pendingAction={pendingAction}
+      submitting={submitting}
+      statusAnchor={statusAnchor}
+      setStatusAnchor={setStatusAnchor}
+      selectedStatusFeature={selectedStatusFeature}
+      setSelectedStatusFeature={setSelectedStatusFeature}
+      updateStatus={updateStatus}
+      openEditor={openEditor}
+      setDeleteTarget={setDeleteTarget}
+      updatePercentage={updatePercentage}
+    />
+  );
+};
 
   const submitDisabled =
     activeFeatures.length < 2 ||
@@ -1242,151 +889,17 @@ component="span"
         ) : null}
       </Box>
 
-      <Dialog
-        open={Boolean(editingFeature)}
-        onClose={() => !pendingAction && setEditingFeature(null)}
-        fullWidth
-        maxWidth="sm"
-        aria-labelledby="edit-feature-title"
-      >
-        <Box component="form" onSubmit={saveFeature}>
-          <DialogTitle id="edit-feature-title">
-            Edit feature
-          </DialogTitle>
-
-          <DialogContent>
-            {error && (
-              <Alert severity="error" sx={{ mb: 2 }}>
-                {error}
-              </Alert>
-            )}
-
-            <Stack spacing={2} sx={{ pt: 1 }}>
-              <TextField
-                autoFocus
-                fullWidth
-                required
-                label="Feature name"
-                value={editName}
-                onChange={(event) => setEditName(event.target.value)}
-                slotProps={{ htmlInput: { maxLength: 255 } }}
-              />
-
-              <TextField
-                fullWidth
-                label="Feature description (optional)"
-                value={editDescription}
-                onChange={(event) =>
-                  setEditDescription(event.target.value)
-                }
-                multiline
-                minRows={3}
-                slotProps={{ htmlInput: { maxLength: 5000 } }}
-              />
-            </Stack>
-          </DialogContent>
-
-          <DialogActions sx={{ px: 3, pb: 2 }}>
-            <Button
-              type="button"
-              onClick={() => setEditingFeature(null)}
-              disabled={Boolean(pendingAction)}
-            >
-              Cancel
-            </Button>
-
-            <Button
-              type="submit"
-              variant="contained"
-              disabled={
-                !editName.trim() || Boolean(pendingAction)
-              }
-            >
-              {pendingAction.startsWith("edit-")
-                ? "Saving…"
-                : "Save changes"}
-            </Button>
-          </DialogActions>
-        </Box>
-      </Dialog>
-
-      <Dialog
-        open={Boolean(deleteTarget)}
-        onClose={() => !pendingAction && setDeleteTarget(null)}
-        fullWidth
-        maxWidth="xs"
-        aria-labelledby="delete-feature-title"
-      >
-        <DialogTitle id="delete-feature-title">
-          Delete feature?
-        </DialogTitle>
-
-        <DialogContent>
-          {error && (
-            <Alert severity="error" sx={{ mb: 2 }}>
-              {error}
-            </Alert>
-          )}
-
-          <DialogContentText>
-            Delete “{deleteTarget?.name}”? Features with saved responses
-            cannot be deleted; mark them Implemented instead so historical
-            results are preserved.
-          </DialogContentText>
-        </DialogContent>
-
-        <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button
-            onClick={() => setDeleteTarget(null)}
-            disabled={Boolean(pendingAction)}
-          >
-            Cancel
-          </Button>
-
-          <Button
-            onClick={removeFeature}
-            color="error"
-            variant="contained"
-            disabled={Boolean(pendingAction)}
-          >
-            {pendingAction.startsWith("delete-")
-              ? "Deleting…"
-              : "Delete feature"}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      <Dialog
-        open={confirmReset}
-        onClose={() => setConfirmReset(false)}
-        fullWidth
-        maxWidth="xs"
-        aria-labelledby="reset-allocation-title"
-      >
-        <DialogTitle id="reset-allocation-title">
-          Distribute points evenly?
-        </DialogTitle>
-
-        <DialogContent>
-          <DialogContentText>
-            This replaces the current draft allocations and clears all pins.
-          </DialogContentText>
-        </DialogContent>
-
-        <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={() => setConfirmReset(false)}>
-            Keep current allocations
-          </Button>
-
-          <Button vvariant="contained"
-            onClick={applyEvenSplit}
-          >
-            Distribute evenly
-          </Button>
-        </DialogActions>
-      </Dialog>
+<FeatureForm
+  editingFeature={editingFeature}
+  setEditingFeature={setEditingFeature}
+  editName={editName}
+  setEditName={setEditName}
+  editDescription={editDescription}
+  setEditDescription={setEditDescription}
+  error={error}
+  pendingAction={pendingAction}
+  saveFeature={saveFeature}
+/>
     </Box>
   );
 }
-
-

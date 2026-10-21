@@ -12,7 +12,6 @@ import {
   DialogContent,
   DialogContentText,
   DialogTitle,
-  Grid,
   IconButton,
   Stack,
   TextField,
@@ -225,11 +224,19 @@ export default function Home() {
         </Typography>
 
         {currentUser && (
-          <Stack
-            direction="row"
-            spacing={1}
-            alignItems="center"
-            sx={{ mt: 2, flexWrap: "wrap" }}
+          <Box
+            sx={{
+              mt: 2,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 1,
+              px: 1.5,
+              py: 0.75,
+              borderRadius: 999,
+              border: "1px solid",
+              borderColor: "divider",
+              bgcolor: "action.hover",
+            }}
           >
             <Box
               sx={{
@@ -237,16 +244,15 @@ export default function Home() {
                 height: 8,
                 borderRadius: "50%",
                 bgcolor: "success.main",
+                flexShrink: 0,
               }}
             />
-
             <Typography variant="body2" color="text.secondary">
-              Role:{" "}
-              {currentUser.roles?.length
+              Role: {currentUser.roles?.length
                 ? currentUser.roles.join(", ")
                 : "Authenticated user"}
             </Typography>
-          </Stack>
+          </Box>
         )}
       </Box>
 
@@ -446,16 +452,20 @@ export default function Home() {
         </Card>
       ) : (
         /* Project cards */
-        <Grid container spacing={{ xs: 2, md: 3 }}>
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: {
+              xs: "minmax(0, 1fr)",
+              sm: "repeat(2, minmax(0, 1fr))",
+              md: "repeat(3, minmax(0, 1fr))",
+            },
+            gap: { xs: 2, md: 3 },
+            alignItems: "stretch",
+          }}
+        >
           {projects.map((project) => (
-            <Grid
-              item
-              xs={12}
-              sm={6}
-              md={4}
-              key={project.id}
-              sx={{ display: "flex" }}
-            >
+            <Box key={project.id} sx={{ minWidth: 0, display: "flex" }}>
               <Card
                 component={Link}
                 to={`/project/${project.id}`}
@@ -464,7 +474,9 @@ export default function Home() {
                   display: "flex",
                   flexDirection: "column",
                   width: "100%",
-                  minHeight: 220,
+                  minWidth: 0,
+                  height: 240,
+                  boxSizing: "border-box",
                   color: "inherit",
                   textDecoration: "none",
                   border: "1px solid",
@@ -498,6 +510,7 @@ export default function Home() {
                     direction="row"
                     alignItems="flex-start"
                     spacing={2}
+                    sx={{ minWidth: 0 }}
                   >
                     <Box
                       sx={{
@@ -540,6 +553,11 @@ export default function Home() {
                           lineHeight: 1.7,
                           whiteSpace: "pre-wrap",
                           overflowWrap: "anywhere",
+                          display: "-webkit-box",
+                          WebkitBoxOrient: "vertical",
+                          WebkitLineClamp: 3,
+                          overflow: "hidden",
+                          minHeight: "5.1em",
                         }}
                       >
                         {project.description || "No description provided."}
@@ -596,9 +614,9 @@ export default function Home() {
                   </Stack>
                 </CardContent>
               </Card>
-            </Grid>
+            </Box>
           ))}
-        </Grid>
+        </Box>
       )}
 
       {/* Delete confirmation dialog */}
