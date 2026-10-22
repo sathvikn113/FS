@@ -548,16 +548,13 @@ def update_feature(
 
 
 # main_admin or assigned app_admin.
-@app.delete(
-    "/api/projects/{project_id}/features/{feature_id}"
-)
+@app.delete("/api/projects/{project_id}/features/{feature_id}")
 def delete_feature(
     project_id: str,
     feature_id: str,
     admin: dict = Depends(require_project_admin),
     db: Session = Depends(get_db),
 ):
-
     feature = (
         db.query(Feature)
         .filter(
@@ -573,28 +570,21 @@ def delete_feature(
             detail="Feature not found",
         )
 
-    has_responses = (
-        db.query(Allocation.id)
-        .filter(Allocation.feature_id == feature_id)
-        .first()
-        is not None
-    )
+    try:
+        # Remove allocations associated with this feature.
+        db.query(Allocation).filter(
+            Allocation.feature_id == feature_id
+        ).delete(synchronize_session=False)
 
-    if has_responses:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "This feature has saved responses and cannot "
-                "be deleted. Mark it Implemented to remove it "
-                "from future allocations."
-            ),
-        )
+        # Delete the feature itself.
+        db.delete(feature)
+        db.commit()
 
-    db.delete(feature)
-    db.commit()
+        return {"ok": True}
 
-    return {"ok": True}
-
+    except Exception:
+        db.rollback()
+        raise
 
 # ==================================================
 # PRIORITIZATION

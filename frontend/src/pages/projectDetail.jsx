@@ -8,6 +8,11 @@ import {
   Button,
   Chip,
   Divider,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   LinearProgress,
   Skeleton,
   Stack,
@@ -211,11 +216,14 @@ export default function ProjectDetail() {
     }
   };
 
-  const reconcile = (nextFeatures, current) =>
-    distributeUntouched(
-      current,
+  // Keep allocation state valid when the feature list changes.
+  // Reinitialize equal shares for the remaining active features.
+  const reconcile = (nextFeatures, _current) => ({
+    values: createEqualAllocation(
       nextFeatures.filter((feature) => feature.status !== "implemented")
-    );
+    ),
+    pinnedIds: new Set(),
+  });
 
   const addFeature = async (event) => {
     event?.preventDefault();
@@ -654,8 +662,7 @@ const renderFeature = (feature, implemented = false) => {
             color="text.secondary"
             sx={{ mb: 2.5 }}
           >
-            Move a slider to set its percentage. The remaining active
-            features share the remaining points equally.
+          
           </Typography>
 
           {canAddFeatures && (
@@ -888,6 +895,37 @@ const renderFeature = (feature, implemented = false) => {
           </Typography>
         ) : null}
       </Box>
+
+<Dialog
+  open={Boolean(deleteTarget)}
+  onClose={() => {
+    if (!pendingAction) setDeleteTarget(null);
+  }}
+  aria-labelledby="delete-feature-dialog-title"
+>
+  <DialogTitle id="delete-feature-dialog-title">Delete feature?</DialogTitle>
+  <DialogContent>
+    <DialogContentText>
+      Are you sure you want to delete “{deleteTarget?.name}”? This action cannot be undone.
+    </DialogContentText>
+  </DialogContent>
+  <DialogActions>
+    <Button
+      onClick={() => setDeleteTarget(null)}
+      disabled={Boolean(pendingAction)}
+    >
+      Cancel
+    </Button>
+    <Button
+      color="error"
+      variant="contained"
+      onClick={removeFeature}
+      disabled={Boolean(pendingAction) || !canManageFeatures}
+    >
+      {pendingAction === `delete-${deleteTarget?.id}` ? "Deleting…" : "Delete"}
+    </Button>
+  </DialogActions>
+</Dialog>
 
 <FeatureForm
   editingFeature={editingFeature}
