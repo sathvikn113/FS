@@ -22,12 +22,15 @@ import AddIcon from "@mui/icons-material/Add";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
 import FolderOutlinedIcon from "@mui/icons-material/FolderOutlined";
 import ArrowForwardRoundedIcon from "@mui/icons-material/ArrowForwardRounded";
+import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
+import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import { Link } from "react-router-dom";
 
 import { api } from "../api";
 
 export default function Home() {
   const [projects, setProjects] = useState([]);
+  const [projectSearch, setProjectSearch] = useState("");
   const [currentUser, setCurrentUser] = useState(null);
 
   const [name, setName] = useState("");
@@ -45,6 +48,16 @@ export default function Home() {
   // Only main_admin can create or delete projects.
   const isMainAdmin =
     currentUser?.roles?.includes("main_admin") ?? false;
+
+  const normalizedProjectSearch = projectSearch.trim().toLowerCase();
+  const filteredProjects = projects.filter((project) => {
+    if (!normalizedProjectSearch) return true;
+
+    return (
+      (project.name || "").toLowerCase().includes(normalizedProjectSearch) ||
+      (project.description || "").toLowerCase().includes(normalizedProjectSearch)
+    );
+  });
 
   // Load public projects and current user independently.
   useEffect(() => {
@@ -394,6 +407,33 @@ export default function Home() {
         </Typography>
       </Box>
 
+      {/* Search projects */}
+      {!loading && projects.length > 0 && (
+        <TextField
+          fullWidth
+          value={projectSearch}
+          onChange={(event) => setProjectSearch(event.target.value)}
+          placeholder="Search projects by name or description..."
+          aria-label="Search projects"
+          sx={{ mb: 3, maxWidth: 680 }}
+          InputProps={{
+            startAdornment: (
+              <SearchRoundedIcon sx={{ mr: 1, color: "text.secondary" }} />
+            ),
+            endAdornment: projectSearch ? (
+              <IconButton
+                aria-label="Clear project search"
+                onClick={() => setProjectSearch("")}
+                edge="end"
+                size="small"
+              >
+                <CloseRoundedIcon />
+              </IconButton>
+            ) : null,
+          }}
+        />
+      )}
+
       {/* Loading state */}
       {loading ? (
         <Box
@@ -450,6 +490,25 @@ export default function Home() {
             </Typography>
           </CardContent>
         </Card>
+      ) : filteredProjects.length === 0 ? (
+        <Card
+          elevation={0}
+          sx={{
+            border: "1px dashed",
+            borderColor: "divider",
+            borderRadius: 3,
+            backgroundImage: "none",
+          }}
+        >
+          <CardContent sx={{ py: 6, textAlign: "center" }}>
+            <Typography variant="h6" fontWeight={700}>
+              No projects match your search
+            </Typography>
+            <Typography color="text.secondary" sx={{ mt: 1 }}>
+              Try a different project name or description.
+            </Typography>
+          </CardContent>
+        </Card>
       ) : (
         /* Project cards */
         <Box
@@ -464,7 +523,7 @@ export default function Home() {
             alignItems: "stretch",
           }}
         >
-          {projects.map((project) => (
+          {filteredProjects.map((project) => (
             <Box key={project.id} sx={{ minWidth: 0, display: "flex" }}>
               <Card
                 component={Link}

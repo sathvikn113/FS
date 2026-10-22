@@ -8,6 +8,7 @@ import {
   Button,
   Chip,
   Divider,
+  IconButton,
   Dialog,
   DialogActions,
   DialogContent,
@@ -25,6 +26,8 @@ import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import BarChartRoundedIcon from "@mui/icons-material/BarChartRounded";
 import ExpandMoreRoundedIcon from "@mui/icons-material/ExpandMoreRounded";
 import SendRoundedIcon from "@mui/icons-material/SendRounded";
+import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
+import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
@@ -82,6 +85,7 @@ export default function ProjectDetail() {
 
   const [featureName, setFeatureName] = useState("");
   const [featureDescription, setFeatureDescription] = useState("");
+  const [featureSearch, setFeatureSearch] = useState("");
   const [stakeholder] = useState("");
 
   const [editingFeature, setEditingFeature] = useState(null);
@@ -112,6 +116,34 @@ export default function ProjectDetail() {
   const implementedFeatures = useMemo(
     () => features.filter((feature) => feature.status === "implemented"),
     [features]
+  );
+
+  const normalizedFeatureSearch = featureSearch.trim().toLowerCase();
+
+  const filteredActiveFeatures = useMemo(
+    () =>
+      activeFeatures.filter((feature) => {
+        if (!normalizedFeatureSearch) return true;
+
+        return (
+          (feature.name || "").toLowerCase().includes(normalizedFeatureSearch) ||
+          (feature.description || "").toLowerCase().includes(normalizedFeatureSearch)
+        );
+      }),
+    [activeFeatures, normalizedFeatureSearch]
+  );
+
+  const filteredImplementedFeatures = useMemo(
+    () =>
+      implementedFeatures.filter((feature) => {
+        if (!normalizedFeatureSearch) return true;
+
+        return (
+          (feature.name || "").toLowerCase().includes(normalizedFeatureSearch) ||
+          (feature.description || "").toLowerCase().includes(normalizedFeatureSearch)
+        );
+      }),
+    [implementedFeatures, normalizedFeatureSearch]
   );
 
   const activeTotal = useMemo(
@@ -507,9 +539,9 @@ const renderFeature = (feature, implemented = false) => {
         color={remaining === 0 ? "success.main" : "text.secondary"}
       >
         {remaining === 0
-          ? "All 100 points are assigned."
+          ? "100% Allocated"
           : remaining > 0
-            ? `${remaining} points remaining.`
+            ? `${remaining} percent remaining.`
             : `${Math.abs(remaining)} points over.`}
       </Typography>
 
@@ -665,6 +697,30 @@ const renderFeature = (feature, implemented = false) => {
           
           </Typography>
 
+          <TextField
+            fullWidth
+            value={featureSearch}
+            onChange={(event) => setFeatureSearch(event.target.value)}
+            placeholder="Search features by name or description..."
+            aria-label="Search features"
+            sx={{ mb: 2.5 }}
+            InputProps={{
+              startAdornment: (
+                <SearchRoundedIcon sx={{ mr: 1, color: "text.secondary" }} />
+              ),
+              endAdornment: featureSearch ? (
+                <IconButton
+                  aria-label="Clear feature search"
+                  onClick={() => setFeatureSearch("")}
+                  edge="end"
+                  size="small"
+                >
+                  <CloseRoundedIcon />
+                </IconButton>
+              ) : null,
+            }}
+          />
+
           {canAddFeatures && (
             <Stack
               component="form"
@@ -716,7 +772,7 @@ const renderFeature = (feature, implemented = false) => {
             </Stack>
           )}
 
-          {activeFeatures.length === 0 ? (
+          {filteredActiveFeatures.length === 0 ? (
             <Box
               sx={{
                 py: 4,
@@ -725,12 +781,15 @@ const renderFeature = (feature, implemented = false) => {
               }}
             >
               <Typography fontWeight={650}>
-                No active features yet
+                {normalizedFeatureSearch
+                  ? "No active features match your search"
+                  : "No active features yet"}
               </Typography>
 
               <Typography color="text.secondary" sx={{ mt: 0.5 }}>
-                Add at least two active features to collect prioritization
-                responses.
+                {normalizedFeatureSearch
+                  ? "Try a different feature name or description."
+                  : "Add at least two active features to collect prioritization responses."}
               </Typography>
             </Box>
           ) : (
@@ -745,7 +804,7 @@ const renderFeature = (feature, implemented = false) => {
                 borderColor: "divider",
               }}
             >
-              {activeFeatures.map((feature) => (
+              {filteredActiveFeatures.map((feature) => (
                 <Box component="li" key={feature.id}>
                   {renderFeature(feature)}
                 </Box>
@@ -753,7 +812,7 @@ const renderFeature = (feature, implemented = false) => {
             </Stack>
           )}
 
-          {implementedFeatures.length > 0 && (
+          {filteredImplementedFeatures.length > 0 && (
             <Accordion
               disableGutters
               elevation={0}
@@ -777,7 +836,7 @@ const renderFeature = (feature, implemented = false) => {
                   variant="subtitle1"
                   fontWeight={650}
                 >
-                  Implemented ({implementedFeatures.length})
+                  Implemented ({filteredImplementedFeatures.length})
                 </Typography>
               </AccordionSummary>
 
@@ -790,7 +849,7 @@ const renderFeature = (feature, implemented = false) => {
                   divider={<Divider flexItem />}
                   sx={{ m: 0, p: 0, listStyle: "none" }}
                 >
-                  {implementedFeatures.map((feature) => (
+                  {filteredImplementedFeatures.map((feature) => (
                     <Box component="li" key={feature.id}>
                       {renderFeature(feature, true)}
                     </Box>
