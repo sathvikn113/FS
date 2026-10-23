@@ -64,7 +64,7 @@ function Shell({ mode, toggle, children }) {
           >
             <TuneRoundedIcon sx={{ width: 22, height: 22, color: "primary.main" }} />
             <Typography component="span" fontWeight={700} sx={{ letterSpacing: "-0.02em" }}>
-              Features Selector
+              Feature Selector
             </Typography>
           </Stack>
           {loading ? null : user ? (
