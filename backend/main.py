@@ -8,6 +8,7 @@ from jwt import PyJWKClient
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
 from database import engine, get_db
 
@@ -15,6 +16,9 @@ from models import (
     Allocation,
     Base,
     Feature,
+    FeatureGroup,
+    FeatureGroupIn,
+    FeatureGroupUpdate,
     FeatureIn,
     FeatureUpdate,
     Project,
@@ -23,6 +27,10 @@ from models import (
     ResponseIn,
     new_id,
 )
+
+
+class AddFeaturesToGroupIn(BaseModel):
+    feature_ids: list[str]
 
 
 # ==================================================
@@ -430,6 +438,351 @@ def get_project_permissions(
 
 
 # ==================================================
+# FEATURE GROUP ENDPOINTS
+# ==================================================
+
+@app.get("/api/projects/{project_id}/feature-groups")
+def list_feature_groups(project_id: str, db: Session = Depends(get_db)):
+    get_project_or_404(db, project_id)
+    groups = db.query(FeatureGroup).filter(FeatureGroup.project_id == project_id).order_by(FeatureGroup.created_at, FeatureGroup.id).all()
+    return [
+        {
+            "id": group.id,
+            "project_id": group.project_id,
+            "name": group.name,
+            "description": group.description,
+            "created_at": group.created_at,
+            "features": [
+                {"id": feature.id, "name": feature.name, "description": feature.description, "status": feature.status}
+                for feature in sorted(group.features, key=lambda item: (item.created_at, item.id))
+            ],
+        }
+        for group in groups
+    ]
+
+
+@app.post("/api/projects/{project_id}/feature-groups", status_code=201)
+def create_feature_group(
+    project_id: str,
+    body: FeatureGroupIn,
+    admin: dict = Depends(require_project_admin),
+    db: Session = Depends(get_db),
+):
+    get_project_or_404(db, project_id)
+    selected = db.query(Feature).filter(
+        Feature.project_id == project_id,
+        Feature.id.in_(body.feature_ids),
+    ).all()
+    if len(selected) != len(body.feature_ids):
+        raise HTTPException(status_code=400, detail="Every selected feature must belong to this project")
+    if any(feature.group_id is not None for feature in selected):
+        raise HTTPException(status_code=400, detail="A selected feature already belongs to a group")
+    if any(feature.status == "implemented" for feature in selected):
+        raise HTTPException(status_code=400, detail="Implemented features cannot be grouped")
+
+    group = FeatureGroup(
+        id=new_id(),
+        project_id=project_id,
+        name=body.name,
+        description=clean_optional_text(body.description),
+        created_by=admin.get("id"),
+    )
+    try:
+        db.add(group)
+        db.flush()
+        for feature in selected:
+            feature.group_id = group.id
+        db.commit()
+        db.refresh(group)
+    except Exception:
+        db.rollback()
+        raise
+    return {
+        "id": group.id,
+        "project_id": group.project_id,
+        "name": group.name,
+        "description": group.description,
+        "created_at": group.created_at,
+        "features": [{"id": f.id, "name": f.name, "description": f.description, "status": f.status} for f in selected],
+    }
+
+@app.post(
+    "/api/projects/{project_id}/feature-groups/{group_id}/features"
+)
+def add_features_to_group(
+    project_id: str,
+    group_id: str,
+    body: AddFeaturesToGroupIn,
+    admin: dict = Depends(require_project_admin),
+    db: Session = Depends(get_db),
+):
+    # Verify that the group exists in this project.
+    group = (
+        db.query(FeatureGroup)
+        .filter(
+            FeatureGroup.id == group_id,
+            FeatureGroup.project_id == project_id,
+        )
+        .first()
+    )
+
+    if not group:
+        raise HTTPException(
+            status_code=404,
+            detail="Feature group not found",
+        )
+
+    # Reject an empty selection.
+    if not body.feature_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Select at least one feature to add",
+        )
+
+    # Reject duplicate IDs.
+    if len(body.feature_ids) != len(set(body.feature_ids)):
+        raise HTTPException(
+            status_code=400,
+            detail="Duplicate feature IDs are not allowed",
+        )
+
+    # Find the selected features belonging to this project.
+    features = (
+        db.query(Feature)
+        .filter(
+            Feature.project_id == project_id,
+            Feature.id.in_(body.feature_ids),
+        )
+        .all()
+    )
+
+    if len(features) != len(body.feature_ids):
+        raise HTTPException(
+            status_code=400,
+            detail="Some features do not belong to this project",
+        )
+
+    # Only ungrouped features can be added.
+    if any(feature.group_id is not None for feature in features):
+        raise HTTPException(
+            status_code=400,
+            detail="Selected features must be ungrouped first",
+        )
+
+    # Keep the existing rule that implemented features cannot be grouped.
+    if any(feature.status == "implemented" for feature in features):
+        raise HTTPException(
+            status_code=400,
+            detail="Implemented features cannot be grouped",
+        )
+
+    try:
+        for feature in features:
+            feature.group_id = group.id
+
+        db.commit()
+
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "ok": True,
+        "group_id": group.id,
+        "added_features": len(features),
+    }
+
+@app.patch("/api/projects/{project_id}/feature-groups/{group_id}")
+def rename_feature_group(
+    project_id: str,
+    group_id: str,
+    body: FeatureGroupUpdate,
+    admin: dict = Depends(require_project_admin),
+    db: Session = Depends(get_db),
+):
+    group = db.query(FeatureGroup).filter(FeatureGroup.id == group_id, FeatureGroup.project_id == project_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Feature group not found")
+    group.name = body.name
+    db.commit()
+    db.refresh(group)
+    return {"id": group.id, "project_id": group.project_id, "name": group.name, "description": group.description}
+
+
+@app.delete("/api/projects/{project_id}/feature-groups/{group_id}/features/{feature_id}")
+def ungroup_feature(
+    project_id: str,
+    group_id: str,
+    feature_id: str,
+    admin: dict = Depends(require_project_admin),
+    db: Session = Depends(get_db),
+):
+    feature = db.query(Feature).filter(Feature.id == feature_id, Feature.project_id == project_id, Feature.group_id == group_id).first()
+    if not feature:
+        raise HTTPException(status_code=404, detail="Feature not found in this group")
+    feature.group_id = None
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/projects/{project_id}/feature-groups/{group_id}")
+def delete_feature_group(
+    project_id: str,
+    group_id: str,
+    admin: dict = Depends(require_project_admin),
+    db: Session = Depends(get_db),
+):
+    group = db.query(FeatureGroup).filter(FeatureGroup.id == group_id, FeatureGroup.project_id == project_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Feature group not found")
+    try:
+        # Keep member features; make them standalone again. Historical group votes remain attached to the group
+        # until deletion; to avoid losing historical scores, retain the group as an archived result target.
+        # This endpoint therefore refuses deletion after group votes exist.
+        group_votes = db.query(Allocation).filter(Allocation.group_id == group_id).count()
+        if group_votes:
+            raise HTTPException(status_code=409, detail="This group has voting history. Ungroup its features only after deciding how to preserve those votes.")
+        for feature in group.features:
+            feature.group_id = None
+        db.delete(group)
+        db.commit()
+        return {"ok": True}
+    except Exception:
+        db.rollback()
+        raise
+
+
+# ==================================================
+# FEATURE GROUP ENDPOINTS
+# ==================================================
+
+@app.get("/api/projects/{project_id}/feature-groups")
+def list_feature_groups(project_id: str, db: Session = Depends(get_db)):
+    get_project_or_404(db, project_id)
+    groups = db.query(FeatureGroup).filter(FeatureGroup.project_id == project_id).order_by(FeatureGroup.created_at, FeatureGroup.id).all()
+    return [
+        {
+            "id": group.id,
+            "project_id": group.project_id,
+            "name": group.name,
+            "description": group.description,
+            "created_at": group.created_at,
+            "features": [
+                {"id": feature.id, "name": feature.name, "description": feature.description, "status": feature.status}
+                for feature in sorted(group.features, key=lambda item: (item.created_at, item.id))
+            ],
+        }
+        for group in groups
+    ]
+
+
+@app.post("/api/projects/{project_id}/feature-groups", status_code=201)
+def create_feature_group(
+    project_id: str,
+    body: FeatureGroupIn,
+    admin: dict = Depends(require_project_admin),
+    db: Session = Depends(get_db),
+):
+    get_project_or_404(db, project_id)
+    selected = db.query(Feature).filter(
+        Feature.project_id == project_id,
+        Feature.id.in_(body.feature_ids),
+    ).all()
+    if len(selected) != len(body.feature_ids):
+        raise HTTPException(status_code=400, detail="Every selected feature must belong to this project")
+    if any(feature.group_id is not None for feature in selected):
+        raise HTTPException(status_code=400, detail="A selected feature already belongs to a group")
+    if any(feature.status == "implemented" for feature in selected):
+        raise HTTPException(status_code=400, detail="Implemented features cannot be grouped")
+
+    group = FeatureGroup(
+        id=new_id(),
+        project_id=project_id,
+        name=body.name,
+        description=clean_optional_text(body.description),
+        created_by=admin.get("id"),
+    )
+    try:
+        db.add(group)
+        db.flush()
+        for feature in selected:
+            feature.group_id = group.id
+        db.commit()
+        db.refresh(group)
+    except Exception:
+        db.rollback()
+        raise
+    return {
+        "id": group.id,
+        "project_id": group.project_id,
+        "name": group.name,
+        "description": group.description,
+        "created_at": group.created_at,
+        "features": [{"id": f.id, "name": f.name, "description": f.description, "status": f.status} for f in selected],
+    }
+
+
+@app.patch("/api/projects/{project_id}/feature-groups/{group_id}")
+def rename_feature_group(
+    project_id: str,
+    group_id: str,
+    body: FeatureGroupUpdate,
+    admin: dict = Depends(require_project_admin),
+    db: Session = Depends(get_db),
+):
+    group = db.query(FeatureGroup).filter(FeatureGroup.id == group_id, FeatureGroup.project_id == project_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Feature group not found")
+    group.name = body.name
+    db.commit()
+    db.refresh(group)
+    return {"id": group.id, "project_id": group.project_id, "name": group.name, "description": group.description}
+
+
+@app.delete("/api/projects/{project_id}/feature-groups/{group_id}/features/{feature_id}")
+def ungroup_feature(
+    project_id: str,
+    group_id: str,
+    feature_id: str,
+    admin: dict = Depends(require_project_admin),
+    db: Session = Depends(get_db),
+):
+    feature = db.query(Feature).filter(Feature.id == feature_id, Feature.project_id == project_id, Feature.group_id == group_id).first()
+    if not feature:
+        raise HTTPException(status_code=404, detail="Feature not found in this group")
+    feature.group_id = None
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/projects/{project_id}/feature-groups/{group_id}")
+def delete_feature_group(
+    project_id: str,
+    group_id: str,
+    admin: dict = Depends(require_project_admin),
+    db: Session = Depends(get_db),
+):
+    group = db.query(FeatureGroup).filter(FeatureGroup.id == group_id, FeatureGroup.project_id == project_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Feature group not found")
+    try:
+        # Keep member features; make them standalone again. Historical group votes remain attached to the group
+        # until deletion; to avoid losing historical scores, retain the group as an archived result target.
+        # This endpoint therefore refuses deletion after group votes exist.
+        group_votes = db.query(Allocation).filter(Allocation.group_id == group_id).count()
+        if group_votes:
+            raise HTTPException(status_code=409, detail="This group has voting history. Ungroup its features only after deciding how to preserve those votes.")
+        for feature in group.features:
+            feature.group_id = None
+        db.delete(group)
+        db.commit()
+        return {"ok": True}
+    except Exception:
+        db.rollback()
+        raise
+
+
+# ==================================================
 # FEATURE ENDPOINTS
 # ==================================================
 
@@ -600,96 +953,56 @@ def submit_response(
     user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-
     project = get_project_or_404(db, project_id)
-
-    validate_response(body, project.features)
+    groups = db.query(FeatureGroup).filter(FeatureGroup.project_id == project_id).all()
+    validate_response(body, project.features, groups)
 
     response = Response(
         id=new_id(),
         project_id=project_id,
-        stakeholder=(
-            clean_optional_text(body.stakeholder)
-            or "Anonymous"
-        ),
+        stakeholder=clean_optional_text(body.stakeholder) or "Anonymous",
     )
-
     db.add(response)
-
-    for allocation in body.allocations:
-
-        db.add(
-            Allocation(
-                id=new_id(),
-                response_id=response.id,
-                feature_id=allocation.featureId,
-                percentage=allocation.percentage,
-            )
-        )
-
+    for item in body.allocations:
+        db.add(Allocation(
+            id=new_id(),
+            response_id=response.id,
+            feature_id=item.featureId,
+            group_id=item.groupId,
+            percentage=item.percentage,
+        ))
     db.commit()
-
     return {"ok": True}
 
 
-# ==================================================
-# RESPONSE VALIDATION
-# ==================================================
+def validate_response(body: ResponseIn, features: list[Feature], groups: list[FeatureGroup]) -> None:
+    active_features = [feature for feature in features if feature.status != "implemented"]
+    active_groups = [group for group in groups if any(f.status != "implemented" for f in group.features)]
+    active_ungrouped = [feature for feature in active_features if feature.group_id is None]
+    item_count = len(active_ungrouped) + len(active_groups)
+    if item_count < 2:
+        raise HTTPException(status_code=400, detail="Add at least 2 active prioritization items before submitting.")
 
-def validate_response(
-    body: ResponseIn,
-    features: list[Feature],
-) -> None:
+    if sum(item.percentage for item in body.allocations) != 100:
+        raise HTTPException(status_code=400, detail="Percentages must sum to exactly 100")
 
-    active_features = [
-        feature
-        for feature in features
-        if feature.status != "implemented"
-    ]
-
-    if len(active_features) < 2:
-        raise HTTPException(
-            status_code=400,
-            detail="Add at least 2 active features before submitting.",
-        )
-
-    total = sum(
-        allocation.percentage
-        for allocation in body.allocations
-    )
-
-    if total != 100:
-        raise HTTPException(
-            status_code=400,
-            detail="Percentages must sum to exactly 100",
-        )
-
-    active_feature_ids = {
-        feature.id for feature in active_features
-    }
-
-    if any(
-        allocation.featureId not in active_feature_ids
-        for allocation in body.allocations
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Allocations must reference active features "
-                "in this project"
-            ),
-        )
-
-    selected_ids = [
-        allocation.featureId
-        for allocation in body.allocations
-    ]
-
-    if len(selected_ids) != len(set(selected_ids)):
-        raise HTTPException(
-            status_code=400,
-            detail="Same feature cannot be selected twice",
-        )
+    feature_by_id = {feature.id: feature for feature in active_ungrouped}
+    group_by_id = {group.id: group for group in active_groups}
+    seen = set()
+    for item in body.allocations:
+        if item.featureId:
+            feature = feature_by_id.get(item.featureId)
+            if not feature:
+                raise HTTPException(status_code=400, detail="Allocations must reference active ungrouped features in this project")
+            key = ("feature", item.featureId)
+        else:
+            group = group_by_id.get(item.groupId)
+            if not group:
+                raise HTTPException(status_code=400, detail="Allocations must reference active groups in this project")
+            key = ("group", item.groupId)
+        if key in seen:
+            raise HTTPException(status_code=400, detail="The same prioritization item cannot be selected twice")
+        seen.add(key)
 
 
 # ==================================================
@@ -697,77 +1010,85 @@ def validate_response(
 # ==================================================
 
 @app.get("/api/projects/{project_id}/results")
-def get_results(
-    project_id: str,
-    db: Session = Depends(get_db),
-):
-
+def get_results(project_id: str, db: Session = Depends(get_db)):
     project = get_project_or_404(db, project_id)
+    all_groups = db.query(FeatureGroup).filter(FeatureGroup.project_id == project_id).all()
+    # Only groups that still contain features are current ranking items.
+    # Keep empty group rows and their historical allocations in the database,
+    # but don't display them as active ranking entries after ungrouping.
+    groups = [group for group in all_groups if group.features]
+    feature_by_id = {feature.id: feature for feature in project.features}
 
-    totals = {
-        feature.id: 0
-        for feature in project.features
-    }
-
-    contributors = {
-        feature.id: 0
-        for feature in project.features
-    }
+    # Scores are accumulated per response item. Historical votes for member features
+    # are attributed to the current group; future votes point directly to group_id.
+    totals = {f"group:{group.id}": 0 for group in groups}
+    contributors = {f"group:{group.id}": 0 for group in groups}
+    for feature in project.features:
+        if feature.group_id is None:
+            totals[f"feature:{feature.id}"] = 0
+            contributors[f"feature:{feature.id}"] = 0
 
     total_points = 0
-
     for response in project.responses:
-
         for allocation in response.allocations:
-
-            total_points += allocation.percentage
-
-            if allocation.feature_id in totals:
-
-                totals[allocation.feature_id] += (
-                    allocation.percentage
-                )
-
+            if allocation.group_id:
+                key = f"group:{allocation.group_id}"
+            else:
+                feature = feature_by_id.get(allocation.feature_id)
+                if not feature:
+                    continue
+                key = f"group:{feature.group_id}" if feature.group_id else f"feature:{feature.id}"
+            # Ignore allocations for groups that are now empty. Their historical
+            # records remain stored, but should not affect the visible ranking/share.
+            if key in totals:
+                total_points += allocation.percentage
+                totals[key] += allocation.percentage
                 if allocation.percentage > 0:
-                    contributors[allocation.feature_id] += 1
+                    contributors[key] += 1
 
-    ranked = sorted(
-        project.features,
-        key=lambda feature: (
-            -totals[feature.id],
-            feature.name.casefold(),
-        ),
-    )
-
-    results = []
-
-    for rank, feature in enumerate(ranked, start=1):
-
-        score = totals[feature.id]
-
-        share = (
-            score / total_points * 100
-            if total_points
-            else 0
-        )
-
-        results.append(
-            {
-                "rank": rank,
+    items = []
+    for group in groups:
+        member_features = [f for f in group.features]
+        # Groups containing only implemented features are still shown in historical results.
+        items.append({
+            "key": f"group:{group.id}",
+            "groupId": group.id,
+            "featureId": None,
+            "name": group.name,
+            "status": "group",
+            "features": [{"id": f.id, "name": f.name, "status": f.status, "implementationStartedAt": f.implementation_started_at} for f in member_features],
+        })
+    for feature in project.features:
+        if feature.group_id is None:
+            items.append({
+                "key": f"feature:{feature.id}",
+                "groupId": None,
                 "featureId": feature.id,
                 "name": feature.name,
                 "status": feature.status,
-                "implementationStartedAt": (
-                    feature.implementation_started_at
-                ),
-                "share": round(share, 1),
-                "priority": round(share, 1),
-                "totalScore": score,
-                "contributors": contributors[feature.id],
-                "stakeholderCount": contributors[feature.id],
-            }
-        )
+                "implementationStartedAt": feature.implementation_started_at,
+                "features": [],
+            })
 
+    ranked = sorted(items, key=lambda item: (-totals.get(item["key"], 0), item["name"].casefold()))
+    results = []
+    for rank, item in enumerate(ranked, start=1):
+        score = totals.get(item["key"], 0)
+        share = score / total_points * 100 if total_points else 0
+        results.append({
+            "rank": rank,
+            "featureId": item["featureId"],
+            "groupId": item["groupId"],
+            "name": item["name"],
+            "status": item["status"],
+            "implementationStartedAt": item.get("implementationStartedAt"),
+            "features": item["features"],
+            "share": round(share, 1),
+            "priority": round(share, 1),
+            "totalScore": score,
+            "contributors": contributors.get(item["key"], 0),
+            "stakeholderCount": contributors.get(item["key"], 0),
+        })
     return {
         "projectName": project.name,
         "responseCount": len(project.responses),

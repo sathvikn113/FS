@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Alert,
   Box,
   Button,
@@ -12,6 +15,7 @@ import {
   Typography,
 } from "@mui/material";
 import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
+import ExpandMoreRoundedIcon from "@mui/icons-material/ExpandMoreRounded";
 import EmojiEventsRoundedIcon from "@mui/icons-material/EmojiEventsRounded";
 import GroupsRoundedIcon from "@mui/icons-material/GroupsRounded";
 import InsightsRoundedIcon from "@mui/icons-material/InsightsRounded";
@@ -127,7 +131,7 @@ export default function Results() {
       {data && (
         <>
           <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))", md: "repeat(3, minmax(0, 1fr))" }, gap: 2, mb: 4 }}>
-            <StatCard icon={<InsightsRoundedIcon />} label="Total Features" value={results.length} hint="Active and implemented features" />
+            <StatCard icon={<InsightsRoundedIcon />} label="Prioritization Items" value={results.length} hint="Active and implemented features" />
             <StatCard icon={<GroupsRoundedIcon />} label="Responses" value={data.responseCount ?? 0} hint="Submitted prioritizations" />
             <StatCard icon={<EmojiEventsRoundedIcon />} label="Top priority" value={topFeature ? `${Number(topFeature.share ?? topFeature.priority ?? 0).toFixed(1)}%` : "—"} hint={topFeature?.name || "No responses yet"} />
           </Box>
@@ -175,6 +179,16 @@ export default function Results() {
                               <Typography variant="body2" color="text.secondary">Total score: <Box component="span" sx={{ color: "text.primary", fontWeight: 650 }}>{item.totalScore ?? 0}</Box></Typography>
                               <Typography variant="body2" color="text.secondary">Contributors: <Box component="span" sx={{ color: "text.primary", fontWeight: 650 }}>{item.contributors ?? item.stakeholderCount ?? 0}</Box></Typography>
                             </Stack>
+                            {item.groupId && item.features?.length > 0 && (
+                              <Accordion disableGutters elevation={0} sx={{ mt: 1, bgcolor: "transparent", "&::before": { display: "none" } }}>
+                                <AccordionSummary expandIcon={<ExpandMoreRoundedIcon />} sx={{ px: 0, minHeight: 36, "& .MuiAccordionSummary-content": { my: 0.5 } }}>
+                                  <Typography variant="body2">View grouped features ({item.features.length})</Typography>
+                                </AccordionSummary>
+                                <AccordionDetails sx={{ px: 0, pt: 0 }}>
+                                  <Stack spacing={0.5}>{item.features.map((feature) => <Typography key={feature.id} variant="body2" color="text.secondary">• {feature.name}</Typography>)}</Stack>
+                                </AccordionDetails>
+                              </Accordion>
+                            )}
                           </Box>
                         </Stack>
                       </Box>

@@ -43,9 +43,20 @@ async function request(path, options = {}) {
 const projectPath = (projectId) =>
   `/projects/${encodeURIComponent(projectId)}`;
 
+const featurePath = (projectId, featureId) =>
+  `${projectPath(projectId)}/features/${encodeURIComponent(featureId)}`;
+
+const featureGroupPath = (projectId, groupId) =>
+  `${projectPath(projectId)}/feature-groups/${encodeURIComponent(groupId)}`;
+
 export const api = {
+
+  // AUTHENTICATION
+
   getCurrentUser: (signal) =>
     request("/auth/me", { signal }),
+
+  // PROJECTS
 
   getProjects: (signal) =>
     request("/projects", { signal }),
@@ -67,6 +78,8 @@ export const api = {
       method: "DELETE",
     }),
 
+  // FEATURES
+
   getFeatures: (projectId, signal) =>
     request(`${projectPath(projectId)}/features`, { signal }),
 
@@ -77,27 +90,77 @@ export const api = {
     }),
 
   updateFeature: (projectId, featureId, body) =>
-    request(
-      `${projectPath(projectId)}/features/${encodeURIComponent(featureId)}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify(body),
-      }
-    ),
+    request(featurePath(projectId, featureId), {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
 
   deleteFeature: (projectId, featureId) =>
+    request(featurePath(projectId, featureId), {
+      method: "DELETE",
+    }),
+
+  // FEATURE GROUPS
+
+  getFeatureGroups: (projectId, signal) =>
+    request(`${projectPath(projectId)}/feature-groups`, { signal }),
+
+  createFeatureGroup: (projectId, body) =>
+    request(`${projectPath(projectId)}/feature-groups`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateFeatureGroup: (projectId, groupId, body) =>
+    request(featureGroupPath(projectId, groupId), {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+
+  deleteFeatureGroup: (projectId, groupId) =>
+    request(featureGroupPath(projectId, groupId), {
+      method: "DELETE",
+    }),
+
+  addFeatureToGroup: (projectId, groupId, body) =>
+    request(`${featureGroupPath(projectId, groupId)}/features`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  addFeaturesToGroup: (projectId, groupId, featureIds) =>
+  request(
+    `${featureGroupPath(projectId, groupId)}/features`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        feature_ids: featureIds,
+      }),
+    }
+  ),
+
+  removeFeatureFromGroup: (projectId, groupId, featureId) =>
     request(
-      `${projectPath(projectId)}/features/${encodeURIComponent(featureId)}`,
+      `${featureGroupPath(projectId, groupId)}/features/${encodeURIComponent(
+        featureId
+      )}`,
       {
         method: "DELETE",
       }
     ),
+  
+  ungroupFeature: (projectId,groupId,featureId) =>
+    api.removeFeatureFromGroup(projectId,groupId,featureId),
+
+  // PRIORITIZATION
 
   submitResponse: (projectId, body) =>
     request(`${projectPath(projectId)}/responses`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  // RESULTS
 
   getResults: (projectId, signal) =>
     request(`${projectPath(projectId)}/results`, { signal }),
