@@ -42,15 +42,23 @@ export default function FeatureCard({
   const currentStatus =
     IMPLEMENTATION_STATUSES.find(
       (item) => item.value === feature.status
-    ) || implementationStatuses[0];
+    ) || IMPLEMENTATION_STATUSES[0];
 
   return (
-    <Box component="article" sx={{ py: 2.25 }}>
+    <Box
+      component="article"
+      sx={{
+        py: 1.25,
+        borderBottom: "1px solid",
+        borderColor: "divider",
+        "&:last-of-type": { borderBottom: 0 },
+      }}
+    >
       <Stack
         direction={{ xs: "column", sm: "row" }}
-        spacing={{ xs: 1.25, sm: 1.75 }}
+        spacing={{ xs: 0.75, sm: 1.25 }}
         sx={{
-          alignItems: { xs: "stretch", sm: "center" },
+          alignItems: { xs: "stretch", sm: "flex-start" },
         }}
       >
         <FeatureInfo
@@ -60,7 +68,7 @@ export default function FeatureCard({
 
         <Stack
           direction={{ xs: "column", sm: "row" }}
-          spacing={{ xs: 0.75, sm: 1 }}
+          spacing={{ xs: 0.5, sm: 0.75 }}
           sx={{
             width: { xs: "100%", sm: "auto" },
             alignItems: { xs: "stretch", sm: "center" },
@@ -80,13 +88,13 @@ export default function FeatureCard({
                   }}
                   disabled={Boolean(pendingAction) || submitting}
                   sx={{
-                    minWidth: 130,
-                    minHeight: 38,
-                    px: 1.5,
+                    minWidth: 118,
+                    minHeight: 32,
+                    px: 1.25,
                     borderRadius: "9px",
                     textTransform: "none",
                     justifyContent: "flex-start",
-                    fontSize: "0.8rem",
+                    fontSize: "0.76rem",
                     fontWeight: 600,
                     boxShadow: "none",
                     color: currentStatus.color,
@@ -106,7 +114,7 @@ export default function FeatureCard({
                       height: 8,
                       borderRadius: "50%",
                       flexShrink: 0,
-                      mr: 1,
+                      mr: 0.75,
                       backgroundColor: currentStatus.color,
                     }}
                   />
@@ -201,7 +209,7 @@ export default function FeatureCard({
               component="span"
               variant="body2"
               fontWeight={700}
-              sx={{ minWidth: 48, textAlign: "right" }}
+              sx={{ minWidth: 44, textAlign: "right" }}
             >
               {implemented ? "Done" : `${value}%`}
             </Typography>
@@ -224,7 +232,7 @@ export default function FeatureCard({
                   aria-label={`Edit ${feature.name}`}
                   onClick={() => openEditor(feature)}
                   disabled={Boolean(pendingAction) || submitting}
-                  sx={{ width: 44, height: 44 }}
+                  sx={{ width: 36, height: 36 }}
                 >
                   <EditOutlinedIcon />
                 </IconButton>
@@ -236,7 +244,7 @@ export default function FeatureCard({
                   color="error"
                   onClick={() => setDeleteTarget(feature)}
                   disabled={Boolean(pendingAction) || submitting}
-                  sx={{ width: 44, height: 44 }}
+                  sx={{ width: 36, height: 36 }}
                 >
                   <DeleteOutlineRoundedIcon />
                 </IconButton>
@@ -259,8 +267,9 @@ export default function FeatureCard({
           }
           disabled={Boolean(pendingAction) || submitting}
           sx={{
-            mt: 0.75,
-            mb: -0.5,
+            mt: 0.25,
+            mb: -0.75,
+            py: 0.5,
             color: "primary.main",
           }}
         />
@@ -268,7 +277,7 @@ export default function FeatureCard({
         <Typography
           variant="body2"
           color="text.secondary"
-          sx={{ mt: 0.75 }}
+          sx={{ mt: 0.5 }}
         >
           This feature is excluded from new allocations.
         </Typography>

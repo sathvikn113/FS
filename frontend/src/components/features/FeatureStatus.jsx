@@ -7,16 +7,16 @@ export default function FeatureStatus({ currentStatus }) {
       label={currentStatus.label}
       variant="outlined"
       sx={{
-        minWidth: 130,
-        minHeight: 38,
+        minWidth: 118,
+        minHeight: 32,
         justifyContent: "flex-start",
         borderRadius: "9px",
-        fontSize: "0.8rem",
+        fontSize: "0.76rem",
         fontWeight: 600,
         backgroundColor: `${currentStatus.color}1A`,
         color: currentStatus.color,
         borderColor: `${currentStatus.color}40`,
-        "& .MuiChip-label": { px: 1.5 },
+        "& .MuiChip-label": { px: 1.25 },
       }}
     />
   );

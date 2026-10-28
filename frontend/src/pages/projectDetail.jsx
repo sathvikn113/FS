@@ -733,7 +733,7 @@ const renderFeature = (feature, implemented = false) => {
         {remaining === 0
           ? "100% Allocated"
           : remaining > 0
-            ? `${remaining} percent remaining.`
+            ? `${remaining}% remaining.`
             : `${Math.abs(remaining)} points over.`}
       </Typography>
 
@@ -747,7 +747,7 @@ const renderFeature = (feature, implemented = false) => {
         </Typography>
       ) : (
         <Typography variant="body2" color="text.secondary">
-          Ready to submit.
+      
         </Typography>
       )}
 
@@ -767,7 +767,7 @@ const renderFeature = (feature, implemented = false) => {
 
   return (
     <Box sx={{ width: "100%", minWidth: 0, pb: { xs: 8, md: 4 }, pt: { xs: 1.5, md: 2 } }}>
-      <Box sx={{ mb: 3 }}>
+      <Box sx={{ mb: 1.5 }}>
         <Button
           startIcon={<ArrowBackRoundedIcon />}
           onClick={() => navigate("/")}
@@ -776,16 +776,16 @@ const renderFeature = (feature, implemented = false) => {
           All projects
         </Button>
 
-        <Box sx={{ position: "relative", textAlign: "center", px: { xs: 0, sm: 2 }, py: 1 }}>
-          <Typography component="h1" variant="h3" sx={{ fontWeight: 750, overflowWrap: "anywhere" }}>
+        <Box sx={{ position: "relative", textAlign: "center", px: { xs: 0, sm: 2 }, pt: { xs: 0.25, md: 0.5 }, pb: 0.25 }}>
+          <Typography component="h1" variant="h3" sx={{ fontWeight: 750, fontSize: { xs: "2rem", sm: "2.4rem", md: "2.65rem" }, lineHeight: 1.12, overflowWrap: "anywhere" }}>
             {project.name}
           </Typography>
-          <Typography color="text.secondary" sx={{ mt: 0.75, mx: "auto", maxWidth: 760 }}>
+          <Typography color="text.secondary" sx={{ mt: 0.5, mx: "auto", maxWidth: 760, lineHeight: 1.45 }}>
             {project.description?.trim() || "No description provided."}
           </Typography>
         </Box>
 
-        <Box sx={{ display: "flex", justifyContent: "flex-end", mt: 1 }}>
+        <Box sx={{ display: "flex", justifyContent: "flex-end", mt: 0.25 }}>
         <Button
           variant="outlined"
           startIcon={<BarChartRoundedIcon />}
@@ -836,7 +836,7 @@ const renderFeature = (feature, implemented = false) => {
             xs: "minmax(0, 1fr)",
             md: "minmax(0, 1.7fr) minmax(260px, 0.7fr)",
           },
-          gap: { xs: 3, md: 5 },
+          gap: { xs: 2, md: 3.5 },
           alignItems: "start",
         }}
       >
@@ -851,7 +851,7 @@ const renderFeature = (feature, implemented = false) => {
             sx={{
               alignItems: { xs: "flex-start", sm: "center" },
               justifyContent: "space-between",
-              mb: 1,
+              mb: 0.75,
             }}
           >
       
@@ -882,7 +882,7 @@ const renderFeature = (feature, implemented = false) => {
             onChange={(event) => setFeatureSearch(event.target.value)}
             placeholder="Search features by name or description..."
             aria-label="Search features"
-            sx={{ mb: 2.5 }}
+            sx={{ mb: 1.75 }}
             InputProps={{
               startAdornment: (
                 <SearchRoundedIcon sx={{ mr: 1, color: "text.secondary" }} />
@@ -905,7 +905,7 @@ const renderFeature = (feature, implemented = false) => {
               component="form"
               onSubmit={addFeature}
               spacing={1.5}
-              sx={{ mb: 2.5 }}
+              sx={{ mb: 2 }}
             >
               <TextField
                 fullWidth
@@ -956,7 +956,7 @@ const renderFeature = (feature, implemented = false) => {
             if (!groupItem) return null;
             const members = group.features.filter((feature) => feature.status !== "implemented" && (!normalizedFeatureSearch || group.name.toLowerCase().includes(normalizedFeatureSearch) || `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)));
             return (
-              <Box key={group.id} sx={{ borderTop: "1px solid", borderColor: "divider" }}>
+              <Box key={group.id} sx={{ borderTop: "1px solid", borderColor: "divider", pb: 0.25 }}>
                 <Stack direction="row" justifyContent="flex-end" sx={{ pt: 1, px: 1 }}>
                   {canManageFeatures && (
                     <Button
@@ -977,9 +977,9 @@ const renderFeature = (feature, implemented = false) => {
                     <Typography variant="body2" fontWeight={650}>View</Typography>
                   </AccordionSummary>
                   <AccordionDetails sx={{ pt: 0 }}>
-                    <Stack spacing={1}>
+                    <Stack spacing={0.5}>
                       {members.map((member) => (
-                        <Stack key={member.id} direction="row" spacing={1} sx={{ alignItems: "center", justifyContent: "space-between", py: 0.5 }}>
+                        <Stack key={member.id} direction="row" spacing={1} sx={{ alignItems: "center", justifyContent: "space-between", py: 0.25 }}>
                           <Box sx={{ minWidth: 0 }}>
                             <Typography>{member.name}</Typography>
                             {member.description && <Typography variant="body2" color="text.secondary">{member.description}</Typography>}
@@ -1039,7 +1039,7 @@ const renderFeature = (feature, implemented = false) => {
               disableGutters
               elevation={0}
               sx={{
-                mt: 2,
+                mt: 1.5,
                 borderTop: "1px solid",
                 borderBottom: "1px solid",
                 borderColor: "divider",
