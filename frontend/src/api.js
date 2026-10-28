@@ -78,8 +78,6 @@ export const api = {
     }),
 
   // PROJECT SUPPORT EMAIL
-  // Main Admin / App Admin can update the email.
-  // The backend must enforce these permissions.
 
   updateProjectSupportEmail: (projectId, email) =>
     request(`${projectPath(projectId)}/support-email`, {
@@ -160,7 +158,14 @@ export const api = {
     ),
 
   ungroupFeature: (projectId, groupId, featureId) =>
-    api.removeFeatureFromGroup(projectId, groupId, featureId),
+    request(
+      `${featureGroupPath(projectId, groupId)}/features/${encodeURIComponent(
+        featureId
+      )}`,
+      {
+        method: "DELETE",
+      }
+    ),
 
   // PRIORITIZATION
 

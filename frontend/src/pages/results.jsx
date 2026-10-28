@@ -9,6 +9,11 @@ import {
   Card,
   CardContent,
   Chip,
+  FormControl,
+  InputLabel,
+  MenuItem,
+  Select,
+  TextField,
   LinearProgress,
   Skeleton,
   Stack,
@@ -19,7 +24,7 @@ import ExpandMoreRoundedIcon from "@mui/icons-material/ExpandMoreRounded";
 import EmojiEventsRoundedIcon from "@mui/icons-material/EmojiEventsRounded";
 import GroupsRoundedIcon from "@mui/icons-material/GroupsRounded";
 import InsightsRoundedIcon from "@mui/icons-material/InsightsRounded";
-import { useNavigate, useParams, useLocation } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 
 const STATUS_LABELS = {
@@ -48,10 +53,12 @@ function StatCard({ icon, label, value, hint }) {
 export default function Results() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const location = useLocation();
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [retryKey, setRetryKey] = useState(0);
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [percentageOperator, setPercentageOperator] = useState("all");
+  const [percentageValue, setPercentageValue] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -73,9 +80,20 @@ export default function Results() {
     };
   }, [id, retryKey]);
 
-  const results = useMemo(() => data?.results || [], [data]);
+  const allResults = useMemo(() => data?.results || [], [data]);
+  const results = useMemo(() => allResults.filter((item) => {
+    const statusMatches = statusFilter === "all" || item.status === statusFilter;
+    const share = Number(item.share ?? item.priority ?? 0);
+    const threshold = percentageValue === "" ? null : Number(percentageValue);
+    let percentageMatches = true;
+    if (threshold !== null && Number.isFinite(threshold) && percentageOperator !== "all") {
+      if (percentageOperator === "gt") percentageMatches = share > threshold;
+      if (percentageOperator === "lt") percentageMatches = share < threshold;
+      if (percentageOperator === "eq") percentageMatches = share === threshold;
+    }
+    return statusMatches && percentageMatches;
+  }), [allResults, statusFilter, percentageOperator, percentageValue]);
   const topFeature = results[0];
-  const maxShare = Math.max(1, ...results.map((item) => Number(item.share ?? item.priority ?? 0)));
 
   if (!data && !error) {
     return (
@@ -136,11 +154,40 @@ export default function Results() {
             <StatCard icon={<EmojiEventsRoundedIcon />} label="Top priority" value={topFeature ? `${Number(topFeature.share ?? topFeature.priority ?? 0).toFixed(1)}%` : "—"} hint={topFeature?.name || "No responses yet"} />
           </Box>
 
+          <Card variant="outlined" sx={{ borderRadius: 3, p: { xs: 1.5, sm: 2 }, mb: 2.5 }}>
+            <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1.5 }}>Filter results</Typography>
+            <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "repeat(3, minmax(0, 1fr))" }, gap: 1.5 }}>
+              <FormControl size="small" fullWidth>
+                <InputLabel id="result-status-filter-label">Status</InputLabel>
+                <Select labelId="result-status-filter-label" label="Status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+                  <MenuItem value="all">All statuses</MenuItem>
+                  <MenuItem value="planned">Planned</MenuItem>
+                  <MenuItem value="in_progress">In Progress</MenuItem>
+                  <MenuItem value="implemented">Implemented</MenuItem>
+                </Select>
+              </FormControl>
+              <FormControl size="small" fullWidth>
+                <InputLabel id="result-percentage-operator-label">Percentage</InputLabel>
+                <Select labelId="result-percentage-operator-label" label="Percentage" value={percentageOperator} onChange={(event) => setPercentageOperator(event.target.value)}>
+                  <MenuItem value="all">Any percentage</MenuItem>
+                  <MenuItem value="gt">Greater than (&gt;)</MenuItem>
+                  <MenuItem value="lt">Less than (&lt;)</MenuItem>
+
+                </Select>
+              </FormControl>
+              <TextField size="small" fullWidth type="number" label="Percentage value" value={percentageValue} onChange={(event) => setPercentageValue(event.target.value)} inputProps={{ min: 0, max: 100, step: 0.1 }} disabled={percentageOperator === "all"} />
+            </Box>
+            <Stack direction="row" spacing={1} sx={{ alignItems: "center", mt: 1.5 }}>
+              <Typography variant="body2" color="text.secondary">Showing {results.length} of {allResults.length} items</Typography>
+              <Button size="small" onClick={() => { setStatusFilter("all"); setPercentageOperator("all"); setPercentageValue(""); }}>Clear filters</Button>
+            </Stack>
+          </Card>
+
           {results.length === 0 ? (
             <Card variant="outlined" sx={{ borderRadius: 3, p: { xs: 2.5, sm: 4 } }}>
-              <Typography variant="h6" fontWeight={700}>No results yet</Typography>
-              <Typography color="text.secondary" sx={{ mt: 0.75 }}>Once people submit their prioritizations, the ranking will appear here.</Typography>
-              <Button variant="contained" onClick={() => navigate(`/project/${id}`)} sx={{ mt: 2, minHeight: 44 }}>Prioritize features</Button>
+              <Typography variant="h6" fontWeight={700}>{allResults.length === 0 ? "No results yet" : "No items match these filters"}</Typography>
+              <Typography color="text.secondary" sx={{ mt: 0.75 }}>{allResults.length === 0 ? "Once people submit their prioritizations, the ranking will appear here." : "Try changing or clearing your filters."}</Typography>
+              {allResults.length === 0 && <Button variant="contained" onClick={() => navigate(`/project/${id}`)} sx={{ mt: 2, minHeight: 44 }}>Prioritize features</Button>}
             </Card>
           ) : (
             <Box component="section" aria-labelledby="ranking-heading">
@@ -155,7 +202,7 @@ export default function Results() {
                     const share = Number(item.share ?? item.priority ?? 0);
                     const status = STATUS_LABELS[item.status] || item.status || "Planned";
                     return (
-                      <Box key={item.featureId || `${item.name}-${index}`} sx={{ p: { xs: 2, sm: 2.5 }, bgcolor: index === 0 ? "action.hover" : "transparent" }}>
+                      <Box key={item.groupId ? `group-${item.groupId}` : item.featureId || `${item.name}-${index}`} sx={{ p: { xs: 2, sm: 2.5 }, bgcolor: index === 0 ? "action.hover" : "transparent" }}>
                         <Stack direction="row" spacing={1.5} sx={{ alignItems: "flex-start" }}>
                           <Box sx={{ flexShrink: 0, display: "grid", placeItems: "center", width: 42, height: 42, borderRadius: 2, fontWeight: 800, fontSize: "1.05rem", bgcolor: index === 0 ? "primary.main" : "action.hover", color: index === 0 ? "primary.contrastText" : "text.secondary" }}>
                             {String(index + 1).padStart(2, "0")}

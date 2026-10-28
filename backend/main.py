@@ -499,6 +499,7 @@ def list_feature_groups(project_id: str, db: Session = Depends(get_db)):
             "name": group.name,
             "description": group.description,
             "status": group.status,
+            "implementation_started_at": group.implementation_started_at,
             "created_at": group.created_at,
             "features": [
                 {"id": feature.id, "name": feature.name, "description": feature.description, "status": feature.status}
@@ -550,6 +551,8 @@ def create_feature_group(
         "project_id": group.project_id,
         "name": group.name,
         "description": group.description,
+        "status": group.status,
+        "implementation_started_at": group.implementation_started_at,
         "created_at": group.created_at,
         "features": [{"id": f.id, "name": f.name, "description": f.description, "status": f.status} for f in selected],
     }
@@ -651,10 +654,19 @@ def rename_feature_group(
     group = db.query(FeatureGroup).filter(FeatureGroup.id == group_id, FeatureGroup.project_id == project_id).first()
     if not group:
         raise HTTPException(status_code=404, detail="Feature group not found")
-    if body.name is not None:
-        group.name = body.name
-    if body.status is not None:
-        group.status = body.status
+    changes = body.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(status_code=422, detail="Provide a group name or status change")
+    if "name" in changes and changes["name"] is None:
+        raise HTTPException(status_code=422, detail="Group name cannot be null")
+    if "status" in changes and changes["status"] is None:
+        raise HTTPException(status_code=422, detail="Group status cannot be null")
+    if changes.get("status") == "in_progress" and group.implementation_started_at is None:
+        group.implementation_started_at = datetime.now(timezone.utc)
+    for field, value in changes.items():
+        if field == "name":
+            value = value.strip()
+        setattr(group, field, value)
     db.commit()
     db.refresh(group)
     return {
@@ -663,6 +675,7 @@ def rename_feature_group(
         "name": group.name,
         "description": group.description,
         "status": group.status,
+        "implementation_started_at": group.implementation_started_at,
     }
 
 
@@ -724,6 +737,7 @@ def list_feature_groups(project_id: str, db: Session = Depends(get_db)):
             "name": group.name,
             "description": group.description,
             "status": group.status,
+            "implementation_started_at": group.implementation_started_at,
             "created_at": group.created_at,
             "features": [
                 {"id": feature.id, "name": feature.name, "description": feature.description, "status": feature.status}
@@ -775,6 +789,8 @@ def create_feature_group(
         "project_id": group.project_id,
         "name": group.name,
         "description": group.description,
+        "status": group.status,
+        "implementation_started_at": group.implementation_started_at,
         "created_at": group.created_at,
         "features": [{"id": f.id, "name": f.name, "description": f.description, "status": f.status} for f in selected],
     }
@@ -791,10 +807,19 @@ def rename_feature_group(
     group = db.query(FeatureGroup).filter(FeatureGroup.id == group_id, FeatureGroup.project_id == project_id).first()
     if not group:
         raise HTTPException(status_code=404, detail="Feature group not found")
-    if body.name is not None:
-        group.name = body.name
-    if body.status is not None:
-        group.status = body.status
+    changes = body.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(status_code=422, detail="Provide a group name or status change")
+    if "name" in changes and changes["name"] is None:
+        raise HTTPException(status_code=422, detail="Group name cannot be null")
+    if "status" in changes and changes["status"] is None:
+        raise HTTPException(status_code=422, detail="Group status cannot be null")
+    if changes.get("status") == "in_progress" and group.implementation_started_at is None:
+        group.implementation_started_at = datetime.now(timezone.utc)
+    for field, value in changes.items():
+        if field == "name":
+            value = value.strip()
+        setattr(group, field, value)
     db.commit()
     db.refresh(group)
     return {
@@ -803,6 +828,7 @@ def rename_feature_group(
         "name": group.name,
         "description": group.description,
         "status": group.status,
+        "implementation_started_at": group.implementation_started_at,
     }
 
 
@@ -1122,7 +1148,8 @@ def get_results(project_id: str, db: Session = Depends(get_db)):
             "groupId": group.id,
             "featureId": None,
             "name": group.name,
-            "status": "group",
+            "status": group.status or "planned",
+            "implementationStartedAt": group.implementation_started_at,
             "features": [{"id": f.id, "name": f.name, "status": f.status, "implementationStartedAt": f.implementation_started_at} for f in member_features],
         })
     for feature in project.features:

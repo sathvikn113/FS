@@ -42,6 +42,7 @@ class FeatureGroup(Base):
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     status = Column(String(20), nullable=False, default="planned", server_default="planned")
+    implementation_started_at = Column(DateTime(timezone=True), nullable=True)
     created_by = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 

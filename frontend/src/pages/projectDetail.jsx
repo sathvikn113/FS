@@ -138,10 +138,11 @@ export default function ProjectDetail() {
         name: group.name,
         description: group.description || `${group.features.length} grouped features`,
         status: group.status || "planned",
+        implementation_started_at: group.implementation_started_at,
         isGroup: true,
         memberFeatures: group.features.filter((feature) => feature.status !== "implemented"),
       }))
-      .filter((group) => group.memberFeatures.length > 0);
+      .filter((group) => group.status !== "implemented" && group.memberFeatures.length > 0);
     return [...ungrouped, ...groups];
   }, [features, featureGroups]);
 
@@ -172,6 +173,20 @@ export default function ProjectDetail() {
         );
       }),
     [implementedFeatures, normalizedFeatureSearch]
+  );
+
+  const filteredImplementedGroups = useMemo(
+    () => featureGroups.filter((group) => {
+      if (group.status !== "implemented") return false;
+      if (!normalizedFeatureSearch) return true;
+      return (
+        (group.name || "").toLowerCase().includes(normalizedFeatureSearch) ||
+        group.features.some((feature) =>
+          `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)
+        )
+      );
+    }),
+    [featureGroups, normalizedFeatureSearch]
   );
 
   const activeTotal = useMemo(
@@ -210,7 +225,7 @@ export default function ProjectDetail() {
         const active = featureData.filter((feature) => feature.status !== "implemented");
         const items = [
           ...active.filter((feature) => !feature.group_id && !groupedIds.has(feature.id)),
-          ...groupData.filter((group) => group.features.some((feature) => feature.status !== "implemented")).map((group) => ({ id: `group:${group.id}` })),
+          ...groupData.filter((group) => group.status !== "implemented" && group.features.some((feature) => feature.status !== "implemented")).map((group) => ({ id: `group:${group.id}` })),
         ];
         setAllocation({ values: createEqualAllocation(items), pinnedIds: new Set() });
 
@@ -283,7 +298,7 @@ export default function ProjectDetail() {
     const active = nextFeatures.filter((feature) => feature.status !== "implemented");
     const items = [
       ...active.filter((feature) => !feature.group_id && !groupedIds.has(feature.id)),
-      ...nextGroups.filter((group) => group.features.some((feature) => feature.status !== "implemented")).map((group) => ({ id: `group:${group.id}` })),
+      ...nextGroups.filter((group) => group.status !== "implemented" && group.features.some((feature) => feature.status !== "implemented")).map((group) => ({ id: `group:${group.id}` })),
     ];
     return { values: createEqualAllocation(items), pinnedIds: new Set() };
   };
@@ -364,13 +379,18 @@ export default function ProjectDetail() {
         : api.updateFeature(id, feature.id, { status }),
       (updated) => {
         if (feature.isGroup) {
-          setFeatureGroups((current) =>
-            current.map((group) =>
-              group.id === feature.groupId
-                ? { ...group, status: updated.status || status }
-                : group
-            )
+          const nextGroups = featureGroups.map((group) =>
+            group.id === feature.groupId
+              ? {
+                  ...group,
+                  status: updated.status || status,
+                  implementation_started_at:
+                    updated.implementation_started_at ?? group.implementation_started_at,
+                }
+              : group
           );
+          setFeatureGroups(nextGroups);
+          setAllocation((current) => reconcile(features, current, nextGroups));
           return;
         }
 
@@ -747,40 +767,25 @@ const renderFeature = (feature, implemented = false) => {
 
   return (
     <Box sx={{ width: "100%", minWidth: 0, pb: { xs: 8, md: 4 }, pt: { xs: 1.5, md: 2 } }}>
-      <Stack
-        direction={{ xs: "column", sm: "row" }}
-        spacing={1.5}
-        sx={{
-          alignItems: { xs: "flex-start", sm: "center" },
-          justifyContent: "space-between",
-          mb: 3,
-        }}
-      >
-        <Box>
-          <Button
-            startIcon={<ArrowBackRoundedIcon />}
-            onClick={() => navigate("/")}
-            sx={{ mb: 0.75, px: 0, minHeight: 40 }}
-          >
-            All projects
-          </Button>
+      <Box sx={{ mb: 3 }}>
+        <Button
+          startIcon={<ArrowBackRoundedIcon />}
+          onClick={() => navigate("/")}
+          sx={{ mb: 0.75, px: 0, minHeight: 40 }}
+        >
+          All projects
+        </Button>
 
-          <Typography component="h1" variant="h3" >
+        <Box sx={{ position: "relative", textAlign: "center", px: { xs: 0, sm: 2 }, py: 1 }}>
+          <Typography component="h1" variant="h3" sx={{ fontWeight: 750, overflowWrap: "anywhere" }}>
             {project.name}
-           
           </Typography>
-
-
-          {project.description && (
-            <Typography
-              color="text.secondary"
-              sx={{ mt: 0.5, maxWidth: 680 }}
-            >
-              {project.description}
-            </Typography>
-          )}
+          <Typography color="text.secondary" sx={{ mt: 0.75, mx: "auto", maxWidth: 760 }}>
+            {project.description?.trim() || "No description provided."}
+          </Typography>
         </Box>
 
+        <Box sx={{ display: "flex", justifyContent: "flex-end", mt: 1 }}>
         <Button
           variant="outlined"
           startIcon={<BarChartRoundedIcon />}
@@ -793,7 +798,8 @@ const renderFeature = (feature, implemented = false) => {
         >
           View results
         </Button>
-      </Stack>
+        </Box>
+      </Box>
 
       {error && !editingFeature && !deleteTarget && (
         <Alert
@@ -945,7 +951,7 @@ const renderFeature = (feature, implemented = false) => {
             </Stack>
           )}
 
-          {featureGroups.filter((group) => group.features.some((feature) => feature.status !== "implemented") && (!normalizedFeatureSearch || group.name.toLowerCase().includes(normalizedFeatureSearch) || group.features.some((feature) => `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)))).map((group) => {
+          {featureGroups.filter((group) => group.status !== "implemented" && group.features.some((feature) => feature.status !== "implemented") && (!normalizedFeatureSearch || group.name.toLowerCase().includes(normalizedFeatureSearch) || group.features.some((feature) => `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)))).map((group) => {
             const groupItem = prioritizationItems.find((item) => item.groupId === group.id);
             if (!groupItem) return null;
             const members = group.features.filter((feature) => feature.status !== "implemented" && (!normalizedFeatureSearch || group.name.toLowerCase().includes(normalizedFeatureSearch) || `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)));
@@ -988,7 +994,7 @@ const renderFeature = (feature, implemented = false) => {
             );
           })}
 
-          {filteredActiveFeatures.length === 0 && !featureGroups.some((group) => group.features.some((feature) => feature.status !== "implemented") && (!normalizedFeatureSearch || group.name.toLowerCase().includes(normalizedFeatureSearch) || group.features.some((feature) => `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)))) ? (
+          {filteredActiveFeatures.length === 0 && !featureGroups.some((group) => group.status !== "implemented" && group.features.some((feature) => feature.status !== "implemented") && (!normalizedFeatureSearch || group.name.toLowerCase().includes(normalizedFeatureSearch) || group.features.some((feature) => `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)))) ? (
             <Box
               sx={{
                 py: 4,
@@ -1028,7 +1034,7 @@ const renderFeature = (feature, implemented = false) => {
             </Stack>
           )}
 
-          {filteredImplementedFeatures.length > 0 && (
+          {(filteredImplementedFeatures.length > 0 || filteredImplementedGroups.length > 0) && (
             <Accordion
               disableGutters
               elevation={0}
@@ -1052,7 +1058,7 @@ const renderFeature = (feature, implemented = false) => {
                   variant="subtitle1"
                   fontWeight={650}
                 >
-                  Implemented ({filteredImplementedFeatures.length})
+                  Implemented ({filteredImplementedFeatures.length + filteredImplementedGroups.length})
                 </Typography>
               </AccordionSummary>
 
@@ -1070,6 +1076,22 @@ const renderFeature = (feature, implemented = false) => {
                       {renderFeature(feature, true)}
                     </Box>
                   ))}
+                  {filteredImplementedGroups.map((group) => {
+                    const groupItem = {
+                      id: `group:${group.id}`,
+                      groupId: group.id,
+                      name: group.name,
+                      description: group.description || `${group.features.length} grouped features`,
+                      status: group.status || "implemented",
+                      implementation_started_at: group.implementation_started_at,
+                      isGroup: true,
+                    };
+                    return (
+                      <Box component="li" key={`group-${group.id}`}>
+                        {renderFeature(groupItem, true)}
+                      </Box>
+                    );
+                  })}
                 </Stack>
               </AccordionDetails>
             </Accordion>
