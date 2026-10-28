@@ -13,7 +13,9 @@ import {
   DialogContentText,
   DialogTitle,
   IconButton,
+  InputAdornment,
   Stack,
+  Tooltip,
   TextField,
   Typography,
 } from "@mui/material";
@@ -21,10 +23,11 @@ import {
 import AddIcon from "@mui/icons-material/Add";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
 import FolderOutlinedIcon from "@mui/icons-material/FolderOutlined";
-import ArrowForwardRoundedIcon from "@mui/icons-material/ArrowForwardRounded";
+import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
+import EmailOutlinedIcon from "@mui/icons-material/EmailOutlined";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
 import { api } from "../api";
 
@@ -44,10 +47,22 @@ export default function Home() {
   const [success, setSuccess] = useState("");
 
   const [pendingDelete, setPendingDelete] = useState(null);
+  const [projectResults, setProjectResults] = useState({});
+  const [projectPermissions, setProjectPermissions] = useState({});
+  const [supportEmailDialogProject, setSupportEmailDialogProject] = useState(null);
+  const [supportEmailDraft, setSupportEmailDraft] = useState("");
+  const [savingSupportEmail, setSavingSupportEmail] = useState(false);
+  const [supportEmailDrafts, setSupportEmailDrafts] = useState({});
+  const [copiedSupportProject, setCopiedSupportProject] = useState(null);
+  const navigate = useNavigate();
 
   // Only main_admin can create or delete projects.
-  const isMainAdmin =
-    currentUser?.roles?.includes("main_admin") ?? false;
+  const userRoles = currentUser?.roles || [];
+  const isMainAdmin = userRoles.includes("main_admin");
+  // Main admins and app/project admins may manage a project's support contact.
+  const canManageSupportEmail = userRoles.some((role) =>
+    ["main_admin", "app_admin", "project_admin"].includes(role)
+  );
 
   const normalizedProjectSearch = projectSearch.trim().toLowerCase();
   const filteredProjects = projects.filter((project) => {
@@ -68,7 +83,11 @@ export default function Home() {
         const data = await api.getProjects();
 
         if (!cancelled) {
-          setProjects(Array.isArray(data) ? data : []);
+          const loadedProjects = Array.isArray(data) ? data : [];
+          setProjects(loadedProjects.map((project) => ({
+            ...project,
+            support_email: project.support_email ?? project.supportEmail ?? null,
+          })));
           setError("");
         }
       } catch (err) {
@@ -106,6 +125,115 @@ export default function Home() {
     };
   }, []);
 
+  // Load project ranking summaries and per-project permissions.
+  useEffect(() => {
+    if (!projects.length) return;
+    let cancelled = false;
+
+    async function loadProjectExtras() {
+      const resultEntries = await Promise.all(
+        projects.map(async (project) => {
+          try {
+            const data = await api.getResults(project.id);
+            const results = Array.isArray(data?.results) ? data.results : [];
+            const highest = results.reduce((best, item) => {
+              const share = Number(item.share ?? item.priority ?? 0);
+              return !best || share > best.share
+                ? { name: item.name || "Feature", share }
+                : best;
+            }, null);
+            return [project.id, highest];
+          } catch {
+            return [project.id, null];
+          }
+        })
+      );
+
+      const permissionEntries = await Promise.all(
+        projects.map(async (project) => {
+          try {
+            const permissions = await api.getProjectPermissions(project.id);
+            return [project.id, permissions];
+          } catch {
+            return [project.id, null];
+          }
+        })
+      );
+
+      if (!cancelled) {
+        setProjectResults(Object.fromEntries(resultEntries));
+        setProjectPermissions(Object.fromEntries(permissionEntries));
+      }
+    }
+
+    loadProjectExtras();
+    return () => { cancelled = true; };
+  }, [projects]);
+
+  const handleCopySupportEmail = async (email, event, projectId = null) => {
+    event?.stopPropagation();
+    const value = (email || "").trim();
+    if (!value) {
+      setError("Enter a support email before copying it.");
+      setSuccess("");
+      return;
+    }
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        // Fallback for browsers/environments where Clipboard API is unavailable.
+        const temporaryInput = document.createElement("textarea");
+        temporaryInput.value = value;
+        temporaryInput.setAttribute("readonly", "");
+        temporaryInput.style.position = "fixed";
+        temporaryInput.style.opacity = "0";
+        document.body.appendChild(temporaryInput);
+        temporaryInput.select();
+        const copied = document.execCommand("copy");
+        document.body.removeChild(temporaryInput);
+        if (!copied) throw new Error("Copy command failed");
+      }
+
+      setCopiedSupportProject(projectId || event?.currentTarget?.dataset?.projectId || value);
+      window.setTimeout(() => setCopiedSupportProject(null), 1800);
+      setSuccess("Support email copied to clipboard.");
+      setError("");
+    } catch {
+      setError("Could not copy the email. Please check your browser clipboard permissions.");
+      setSuccess("");
+    }
+  };
+
+  const handleSaveSupportEmail = async () => {
+    if (!supportEmailDialogProject) return;
+    const email = supportEmailDraft.trim();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setError("Enter a valid email address.");
+      return;
+    }
+    setSavingSupportEmail(true);
+    setError("");
+    setSuccess("");
+    try {
+     
+      await api.updateProjectSupportEmail(supportEmailDialogProject.id, email);
+      setProjects((previous) => previous.map((project) =>
+        project.id === supportEmailDialogProject.id
+          ? { ...project, support_email: email || null, supportEmail: email || null }
+          : project
+      ));
+      setSuccess(email ? "Support email saved." : "Support email removed.");
+      setSupportEmailDialogProject(null);
+      setSupportEmailDraft("");
+    } catch (err) {
+      setError(err.message || "Unable to save the support email. Check the backend/API update.");
+    } finally {
+      setSavingSupportEmail(false);
+    }
+  };
+
   // Create a project.
   const handleCreateProject = async (event) => {
     event.preventDefault();
@@ -138,7 +266,12 @@ export default function Home() {
 
       // Reload the project list after creation.
       const data = await api.getProjects();
-      setProjects(Array.isArray(data) ? data : []);
+      setProjects(
+        (Array.isArray(data) ? data : []).map((project) => ({
+          ...project,
+          support_email: project.support_email ?? project.supportEmail ?? null,
+        }))
+      );
 
       setSuccess("Project created successfully.");
     } catch (err) {
@@ -196,45 +329,22 @@ export default function Home() {
     <Container
       maxWidth={false}
       sx={{
-        maxWidth: 1440,
-        mx: "auto",
-        px: { xs: 2, sm: 4, md: 6 },
-        py: { xs: 3, md: 5 },
+        width: "100%",
+        maxWidth: "none",
+        mx: 0,
+        px: { xs: 1.5, sm: 2.5, md: 3.5 },
+        py: { xs: 2, md: 2.5 },
       }}
     >
       {/* Page heading */}
       <Box
         sx={{
-          mb: { xs: 4, md: 5 },
-          pb: { xs: 3, md: 4 },
-          borderBottom: "1px solid",
+          mb: { xs: 2.5, md: 3 },
+          pb: { xs: 2, md: 2.5 },
+          borderBottom: "0px solid",
           borderColor: "divider",
         }}
       >
-        <Typography
-          component="h1"
-          variant="h3"
-          fontWeight={800}
-          sx={{
-            fontSize: { xs: "2rem", sm: "2.4rem", md: "2.75rem" },
-            letterSpacing: "-0.04em",
-            lineHeight: 1.2,
-            mb: 1.5,
-          }}
-        >
-          Feature Prioritizer
-        </Typography>
-
-        <Typography
-          variant="body1"
-          color="text.secondary"
-          sx={{
-            maxWidth: 650,
-            lineHeight: 1.8,
-          }}
-        >
-          Explore projects, review features, and prioritize what matters.
-        </Typography>
 
         {currentUser && (
           <Box
@@ -295,7 +405,7 @@ export default function Home() {
         <Card
           elevation={0}
           sx={{
-            mb: { xs: 4, md: 5 },
+            mb: { xs: 2.5, md: 3 },
             border: "1px solid",
             borderColor: "divider",
             borderRadius: 3,
@@ -304,8 +414,8 @@ export default function Home() {
         >
           <CardContent
             sx={{
-              p: { xs: 2.5, sm: 3.5 },
-              "&:last-child": { pb: { xs: 2.5, sm: 3.5 } },
+              p: { xs: 2, sm: 2.5 },
+              "&:last-child": { pb: { xs: 2, sm: 2.5 } },
             }}
           >
             <Stack
@@ -387,25 +497,6 @@ export default function Home() {
         </Card>
       )}
 
-      {/* Projects heading */}
-      <Box sx={{ mb: 3 }}>
-        <Typography
-          component="h2"
-          variant="h5"
-          fontWeight={750}
-          sx={{ letterSpacing: "-0.02em" }}
-        >
-          Projects
-        </Typography>
-
-        <Typography
-          variant="body2"
-          color="text.secondary"
-          sx={{ mt: 0.75, lineHeight: 1.7 }}
-        >
-          Select a project to view its features and prioritization results.
-        </Typography>
-      </Box>
 
       {/* Search projects */}
       {!loading && projects.length > 0 && (
@@ -510,173 +601,288 @@ export default function Home() {
           </CardContent>
         </Card>
       ) : (
-        /* Project cards */
-        <Box
-          sx={{
-            display: "grid",
-            gridTemplateColumns: {
-              xs: "minmax(0, 1fr)",
-              sm: "repeat(2, minmax(0, 1fr))",
-              md: "repeat(3, minmax(0, 1fr))",
-            },
-            gap: { xs: 2, md: 3 },
-            alignItems: "stretch",
-          }}
-        >
-          {filteredProjects.map((project) => (
-            <Box key={project.id} sx={{ minWidth: 0, display: "flex" }}>
+        /* Full-width project rows */
+        <Stack spacing={1.5}>
+          {filteredProjects.map((project, index) => {
+            const supportEmail = project.support_email || project.supportEmail || "";
+            const highest = projectResults[project.id];
+            const copied = copiedSupportProject === project.id || copiedSupportProject === supportEmail;
+
+            return (
               <Card
-                component={Link}
-                to={`/project/${project.id}`}
+                key={project.id}
                 elevation={0}
+                onClick={() => navigate(`/project/${project.id}`)}
+                onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget) return;
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    navigate(`/project/${project.id}`);
+                  }
+                }}
+                role="link"
+                tabIndex={0}
+                aria-label={`Open project ${project.name}`}
                 sx={{
-                  display: "flex",
-                  flexDirection: "column",
                   width: "100%",
-                  minWidth: 0,
-                  height: 240,
-                  boxSizing: "border-box",
-                  color: "inherit",
-                  textDecoration: "none",
+                  cursor: "pointer",
+                  overflow: "hidden",
                   border: "1px solid",
                   borderColor: "divider",
                   borderRadius: 3,
-                  backgroundImage: "none",
-                  transition:
-                    "transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease",
+                  background: index % 2 === 0
+                    ? "linear-gradient(105deg, rgba(126,211,168,0.075), rgba(255,255,255,0.012) 65%)"
+                    : "rgba(255,255,255,0.018)",
+                  transition: "border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease",
                   "&:hover": {
-                    transform: "translateY(-4px)",
-                    boxShadow: 4,
                     borderColor: "primary.main",
+                    transform: "translateY(-1px)",
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.14)",
                   },
-                  "&:focus-visible": {
-                    outline: "2px solid",
-                    outlineColor: "primary.main",
-                    outlineOffset: 3,
-                  },
+                  "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: 2 },
                 }}
               >
-                <CardContent
-                  sx={{
-                    p: { xs: 2.5, sm: 3 },
-                    flexGrow: 1,
-                    display: "flex",
-                    flexDirection: "column",
-                    "&:last-child": { pb: { xs: 2.5, sm: 3 } },
-                  }}
-                >
-                  <Stack
-                    direction="row"
-                    alignItems="flex-start"
-                    spacing={2}
-                    sx={{ minWidth: 0 }}
+                <CardContent sx={{ p: { xs: 1.75, sm: 2.25 }, "&:last-child": { pb: { xs: 1.75, sm: 2.25 } } }}>
+                  <Box
+                    sx={{
+                      display: "grid",
+                      gridTemplateColumns: { xs: "minmax(0, 1fr)", md: "minmax(0, 1.35fr) minmax(220px, 0.9fr) minmax(230px, 0.9fr)" },
+                      alignItems: "center",
+                      gap: { xs: 1.5, md: 2.5 },
+                    }}
                   >
-                    <Box
-                      sx={{
-                        width: 48,
-                        height: 48,
-                        borderRadius: 2.5,
-                        bgcolor: "action.hover",
-                        border: "1px solid",
-                        borderColor: "divider",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        flexShrink: 0,
-                      }}
-                    >
-                      <FolderOutlinedIcon
-                        sx={{ fontSize: 24, color: "primary.main" }}
-                      />
-                    </Box>
-
-                    <Box sx={{ flexGrow: 1, minWidth: 0, pt: 0.25 }}>
-                      <Typography
-                        component="h3"
-                        variant="h6"
-                        fontWeight={750}
-                        sx={{
-                          fontSize: { xs: "1.05rem", md: "1.15rem" },
-                          overflowWrap: "anywhere",
-                          lineHeight: 1.4,
-                        }}
-                      >
-                        {project.name}
-                      </Typography>
-
-                      <Typography
-                        variant="body2"
-                        color="text.secondary"
-                        sx={{
-                          mt: 1,
-                          lineHeight: 1.7,
-                          whiteSpace: "pre-wrap",
-                          overflowWrap: "anywhere",
-                          display: "-webkit-box",
-                          WebkitBoxOrient: "vertical",
-                          WebkitLineClamp: 3,
-                          overflow: "hidden",
-                          minHeight: "5.1em",
-                        }}
-                      >
+                    {/* Project name and description */}
+                    <Box sx={{ minWidth: 0 }}>
+                      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.5 }}>
+                        {/* <Box sx={{ width: 7, height: 7, borderRadius: "50%", bgcolor: "primary.main", flexShrink: 0 }} /> */}
+                        <Typography component="h3" fontWeight={750} sx={{ pl: 2, fontSize: "1.02rem", overflowWrap: "anywhere" }}>
+                          {project.name}
+                        </Typography>
+                      </Stack>
+                      <Typography variant="body2" color="text.secondary" sx={{ pl: 2, whiteSpace: "pre-wrap", overflowWrap: "anywhere", lineHeight: 1.5 }}>
                         {project.description || "No description provided."}
                       </Typography>
                     </Box>
 
-                    {/* Delete button: main_admin only */}
-                    {isMainAdmin && (
-                      <IconButton
-                        aria-label={`Delete ${project.name}`}
-                        color="error"
-                        size="small"
-                        disabled={deletingProject}
-                        onClick={(event) =>
-                          handleDeleteClick(event, project)
-                        }
+                    {/* Highest-priority feature is centered in its own column */}
+                    <Box
+                      sx={{
+                        minWidth: 0,
+                        justifySelf: { xs: "stretch", md: "center" },
+                        textAlign: { xs: "left", md: "center" },
+                        px: { xs: 0, md: 1 },
+                      }}
+                    >
+                      {highest ? (
+                        <Box sx={{ display: "inline-flex", flexDirection: "column", alignItems: { xs: "flex-start", md: "center" }, gap: 0.7 }}>
+                          <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 650, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                            Highest priority
+                          </Typography>
+                          <Box sx={{ display: "inline-flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+                            <Typography variant="body2" sx={{ color: "success.main", fontWeight: 700, overflowWrap: "anywhere" }}>
+                              {highest.name}
+                            </Typography>
+                            <Box sx={{ px: 1, py: 0.35, borderRadius: 1.5, bgcolor: "rgba(126,211,168,0.12)", color: "success.main", fontSize: "0.78rem", fontWeight: 800 }}>
+                              {highest.share.toFixed(1)}%
+                            </Box>
+                          </Box>
+                        </Box>
+                      ) : (
+                        <Typography variant="body2" color="text.secondary">No priority results yet</Typography>
+                      )}
+                    </Box>
+
+                    {/* Support contact: admins can edit; users can only view and copy. */}
+                    <Box
+                      onClick={(event) => event.stopPropagation()}
+                      sx={{
+                        minWidth: 0,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: { xs: "flex-start", md: "flex-end" },
+                        gap: 0.75,
+                      }}
+                    >
+                      <Box
                         sx={{
-                          flexShrink: 0,
-                          width: 40,
-                          height: 40,
+                          width: "100%",
+                          maxWidth: { xs: "100%", md: canManageSupportEmail ? 360 : 320 },
+                          minHeight: 46,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 1,
+                          px: 1.25,
+                          py: 0.5,
+                          border: "1px solid",
+                          borderColor: "divider",
+                          borderRadius: 2.5,
+                          bgcolor: "rgba(0,0,0,0.08)",
+                          transition: "border-color 160ms ease, background-color 160ms ease",
+                          "&:hover": {
+                            borderColor: "primary.main",
+                            bgcolor: "action.hover",
+                          },
                         }}
                       >
-                        <DeleteOutlineIcon />
-                      </IconButton>
+                        <EmailOutlinedIcon
+                          sx={{ color: "text.secondary", fontSize: 19, flexShrink: 0 }}
+                        />
+                        <Typography
+                          variant="body2"
+                          title={supportEmail || "No support email configured"}
+                          sx={{
+                            flex: 1,
+                            minWidth: 0,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            color: supportEmail ? "text.primary" : "text.secondary",
+                          }}
+                        >
+                          {supportEmail || "No support email set"}
+                        </Typography>
+                        <Tooltip
+                          title={
+                            copied
+                              ? "Copied!"
+                              : supportEmail
+                                ? "Copy support email"
+                                : "No email to copy"
+                          }
+                          arrow
+                        >
+                          <span>
+                            <IconButton
+                              size="small"
+                              aria-label={`Copy support email for ${project.name}`}
+                              data-project-id={project.id}
+                              disabled={!supportEmail.trim()}
+                              onClick={(event) =>
+                                handleCopySupportEmail(supportEmail, event, project.id)
+                              }
+                              sx={{
+                                width: 34,
+                                height: 34,
+                                borderRadius: 1.75,
+                                color: copied ? "success.main" : "primary.main",
+                                flexShrink: 0,
+                                "&:hover": { bgcolor: "rgba(126,211,168,0.14)" },
+                              }}
+                            >
+                              <ContentCopyRoundedIcon sx={{ fontSize: 18 }} />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      </Box>
+
+                      {canManageSupportEmail && (
+                        <Tooltip title="Edit support email" arrow>
+                          <IconButton
+                            aria-label={`Edit support email for ${project.name}`}
+                            size="small"
+                            onClick={() => {
+                              setSupportEmailDialogProject(project);
+                              setSupportEmailDraft(supportEmail);
+                              setError("");
+                              setSuccess("");
+                            }}
+                            sx={{
+                              width: 36,
+                              height: 36,
+                              flexShrink: 0,
+                              color: "primary.main",
+                            }}
+                          >
+                            <EmailOutlinedIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      )}
+                    </Box>
+
+                    {isMainAdmin && (
+                      <Box sx={{ gridColumn: { xs: "1", md: "1 / -1" }, display: "flex", justifyContent: "flex-end", mt: { xs: -0.5, md: -1 } }} onClick={(event) => event.stopPropagation()}>
+                        <Tooltip title="Delete project" arrow>
+                          <IconButton
+                            aria-label={`Delete ${project.name}`}
+                            color="error"
+                            size="small"
+                            disabled={deletingProject}
+                            onClick={(event) => handleDeleteClick(event, project)}
+                          >
+                            <DeleteOutlineIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
                     )}
-                  </Stack>
-
-                  <Stack
-                    direction="row"
-                    alignItems="center"
-                    spacing={0.75}
-                    sx={{
-                      mt: "auto",
-                      pt: 3,
-                      color: "primary.main",
-                    }}
-                  >
-                    <Typography
-                      variant="body2"
-                      fontWeight={700}
-                    >
-                      View project
-                    </Typography>
-
-                    <ArrowForwardRoundedIcon
-                      sx={{
-                        fontSize: 18,
-                        transition: "transform 180ms ease",
-                        ".MuiCard-root:hover &": {
-                          transform: "translateX(3px)",
-                        },
-                      }}
-                    />
-                  </Stack>
+                  </Box>
                 </CardContent>
               </Card>
-            </Box>
-          ))}
-        </Box>
+            );
+          })}
+        </Stack>
       )}
+
+      {/* Support email editor: available only to main/app/project admins. */}
+      <Dialog
+        open={Boolean(supportEmailDialogProject)}
+        onClose={() => {
+          if (!savingSupportEmail) {
+            setSupportEmailDialogProject(null);
+            setSupportEmailDraft("");
+          }
+        }}
+        fullWidth
+        maxWidth="xs"
+        aria-labelledby="support-email-dialog-title"
+      >
+        <DialogTitle id="support-email-dialog-title" fontWeight={750}>
+          Contact support
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 2 }}>
+            Set the support email users will see for{" "}
+            <strong>{supportEmailDialogProject?.name}</strong>. Users can view
+            and copy this address, but cannot change it.
+          </DialogContentText>
+          <TextField
+            autoFocus
+            fullWidth
+            type="email"
+            label="Support email"
+            placeholder="support@example.com"
+            value={supportEmailDraft}
+            onChange={(event) => setSupportEmailDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                handleSaveSupportEmail();
+              }
+            }}
+            inputProps={{ maxLength: 254 }}
+            helperText="Leave blank to remove the support email."
+          />
+        </DialogContent>
+        <DialogActions sx={{ p: 2.5, pt: 1 }}>
+          <Button
+            onClick={() => {
+              setSupportEmailDialogProject(null);
+              setSupportEmailDraft("");
+            }}
+            disabled={savingSupportEmail}
+            sx={{ textTransform: "none" }}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSaveSupportEmail}
+            variant="contained"
+            disabled={savingSupportEmail || !supportEmailDialogProject}
+            sx={{ textTransform: "none", minWidth: 110 }}
+          >
+            {savingSupportEmail ? "Saving..." : "Save email"}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Delete confirmation dialog */}
       <Dialog

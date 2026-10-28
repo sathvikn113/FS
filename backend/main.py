@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime, timezone
 
 import httpx
@@ -31,6 +32,10 @@ from models import (
 
 class AddFeaturesToGroupIn(BaseModel):
     feature_ids: list[str]
+
+
+class ProjectSupportEmailIn(BaseModel):
+    support_email: str | None = None
 
 
 # ==================================================
@@ -396,6 +401,48 @@ def get_project_detail(
     return get_project_or_404(db, project_id)
 
 
+# Main admin or the app admin assigned to this project can manage its support email.
+# Normal users can read the email through the regular project listing/detail endpoints.
+@app.patch("/api/projects/{project_id}/support-email")
+def update_project_support_email(
+    project_id: str,
+    body: ProjectSupportEmailIn,
+    admin: dict = Depends(require_project_admin),
+    db: Session = Depends(get_db),
+):
+    project = get_project_or_404(db, project_id)
+
+    # This field must also be added to the Project model in models.py.
+    if not hasattr(project, "support_email"):
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Project.support_email is not configured. Add a nullable "
+                "support_email column to the Project model and database."
+            ),
+        )
+
+    email = (body.support_email or "").strip() or None
+    if email and (
+        len(email) > 254
+        or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email)
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Enter a valid support email address or leave it blank.",
+        )
+
+    project.support_email = email
+    db.commit()
+    db.refresh(project)
+
+    return {
+        "id": project.id,
+        "name": project.name,
+        "support_email": project.support_email,
+    }
+
+
 # Only main_admin can delete projects.
 @app.delete("/api/projects/{project_id}")
 def delete_project(
@@ -451,6 +498,7 @@ def list_feature_groups(project_id: str, db: Session = Depends(get_db)):
             "project_id": group.project_id,
             "name": group.name,
             "description": group.description,
+            "status": group.status,
             "created_at": group.created_at,
             "features": [
                 {"id": feature.id, "name": feature.name, "description": feature.description, "status": feature.status}
@@ -603,10 +651,19 @@ def rename_feature_group(
     group = db.query(FeatureGroup).filter(FeatureGroup.id == group_id, FeatureGroup.project_id == project_id).first()
     if not group:
         raise HTTPException(status_code=404, detail="Feature group not found")
-    group.name = body.name
+    if body.name is not None:
+        group.name = body.name
+    if body.status is not None:
+        group.status = body.status
     db.commit()
     db.refresh(group)
-    return {"id": group.id, "project_id": group.project_id, "name": group.name, "description": group.description}
+    return {
+        "id": group.id,
+        "project_id": group.project_id,
+        "name": group.name,
+        "description": group.description,
+        "status": group.status,
+    }
 
 
 @app.delete("/api/projects/{project_id}/feature-groups/{group_id}/features/{feature_id}")
@@ -666,6 +723,7 @@ def list_feature_groups(project_id: str, db: Session = Depends(get_db)):
             "project_id": group.project_id,
             "name": group.name,
             "description": group.description,
+            "status": group.status,
             "created_at": group.created_at,
             "features": [
                 {"id": feature.id, "name": feature.name, "description": feature.description, "status": feature.status}
@@ -733,10 +791,19 @@ def rename_feature_group(
     group = db.query(FeatureGroup).filter(FeatureGroup.id == group_id, FeatureGroup.project_id == project_id).first()
     if not group:
         raise HTTPException(status_code=404, detail="Feature group not found")
-    group.name = body.name
+    if body.name is not None:
+        group.name = body.name
+    if body.status is not None:
+        group.status = body.status
     db.commit()
     db.refresh(group)
-    return {"id": group.id, "project_id": group.project_id, "name": group.name, "description": group.description}
+    return {
+        "id": group.id,
+        "project_id": group.project_id,
+        "name": group.name,
+        "description": group.description,
+        "status": group.status,
+    }
 
 
 @app.delete("/api/projects/{project_id}/feature-groups/{group_id}/features/{feature_id}")

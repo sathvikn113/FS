@@ -88,7 +88,7 @@ export default function Results() {
   }
 
   return (
-    <Box sx={{ pt: { xs: 3, md: 4 }, pb: 7 }}>
+    <Box sx={{ width: "100%", minWidth: 0, pt: { xs: 1.5, md: 2 }, pb: 4 }}>
       <Button startIcon={<ArrowBackRoundedIcon />} onClick={() => navigate(`/project/${id}`)} sx={{ px: 0, mb: 1.5, minHeight: 42 }}>
         Back to project
       </Button>

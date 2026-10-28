@@ -37,7 +37,7 @@ function Shell({ mode, toggle, children }) {
         <Toolbar
           sx={{
             width: "100%",
-            maxWidth: 1180,
+            maxWidth: 1650,
             minHeight: "64px !important",
             mx: "auto",
             px: { xs: 2, sm: 3 },
@@ -109,7 +109,7 @@ function Shell({ mode, toggle, children }) {
         component="main"
         sx={{
           width: "100%",
-          maxWidth: 1180,
+          maxWidth: 1650,
           mx: "auto",
           px: { xs: 2, sm: 3 },
           pb: { xs: 4, md: 6 },

@@ -137,7 +137,7 @@ export default function ProjectDetail() {
         groupId: group.id,
         name: group.name,
         description: group.description || `${group.features.length} grouped features`,
-        status: "planned",
+        status: group.status || "planned",
         isGroup: true,
         memberFeatures: group.features.filter((feature) => feature.status !== "implemented"),
       }))
@@ -359,8 +359,21 @@ export default function ProjectDetail() {
 
     await runMutation(
       `status-${feature.id}`,
-      () => api.updateFeature(id, feature.id, { status }),
+      () => feature.isGroup
+        ? api.updateFeatureGroup(id, feature.groupId, { status })
+        : api.updateFeature(id, feature.id, { status }),
       (updated) => {
+        if (feature.isGroup) {
+          setFeatureGroups((current) =>
+            current.map((group) =>
+              group.id === feature.groupId
+                ? { ...group, status: updated.status || status }
+                : group
+            )
+          );
+          return;
+        }
+
         setFeatures((current) =>
           current.map((item) =>
             item.id === updated.id ? updated : item
@@ -643,7 +656,7 @@ const renderFeature = (feature, implemented = false) => {
       allocation={allocation}
       formatStartDate={formatStartDate}
       IMPLEMENTATION_STATUSES={IMPLEMENTATION_STATUSES}
-      canManageFeatures={canManageFeatures && !feature.isGroup}
+      canManageFeatures={canManageFeatures}
       pendingAction={pendingAction}
       submitting={submitting}
       statusAnchor={statusAnchor}
@@ -733,7 +746,7 @@ const renderFeature = (feature, implemented = false) => {
   );
 
   return (
-    <Box sx={{ pb: { xs: 13, md: 7 }, pt: { xs: 3, md: 4 } }}>
+    <Box sx={{ width: "100%", minWidth: 0, pb: { xs: 8, md: 4 }, pt: { xs: 1.5, md: 2 } }}>
       <Stack
         direction={{ xs: "column", sm: "row" }}
         spacing={1.5}
@@ -752,9 +765,11 @@ const renderFeature = (feature, implemented = false) => {
             All projects
           </Button>
 
-          <Typography component="h1" variant="h3">
+          <Typography component="h1" variant="h3" >
             {project.name}
+           
           </Typography>
+
 
           {project.description && (
             <Typography
@@ -833,13 +848,7 @@ const renderFeature = (feature, implemented = false) => {
               mb: 1,
             }}
           >
-            <Typography
-              component="h2"
-              id="prioritize-heading"
-              variant="h5"
-            >
-              Prioritize features
-            </Typography>
+      
 
             <Chip
               size="small"
@@ -1107,7 +1116,7 @@ const renderFeature = (feature, implemented = false) => {
           spacing={1.5}
           sx={{
             alignItems: "center",
-            maxWidth: 1180,
+            maxWidth: "none",
             mx: "auto",
           }}
         >

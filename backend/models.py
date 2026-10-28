@@ -26,6 +26,7 @@ class Project(Base):
     id = Column(String, primary_key=True)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
+    support_email = Column(String(254), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     features = relationship("Feature", back_populates="project", cascade="all, delete-orphan")
@@ -40,6 +41,7 @@ class FeatureGroup(Base):
     project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
+    status = Column(String(20), nullable=False, default="planned", server_default="planned")
     created_by = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -143,11 +145,14 @@ class FeatureGroupIn(BaseModel):
 
 class FeatureGroupUpdate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
-    name: str = Field(min_length=1, max_length=255)
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    status: Literal["planned", "in_progress", "implemented"] | None = None
 
     @field_validator("name")
     @classmethod
-    def validate_name(cls, value: str) -> str:
+    def validate_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         return _required_trimmed_name(value)
 
 

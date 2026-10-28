@@ -50,7 +50,6 @@ const featureGroupPath = (projectId, groupId) =>
   `${projectPath(projectId)}/feature-groups/${encodeURIComponent(groupId)}`;
 
 export const api = {
-
   // AUTHENTICATION
 
   getCurrentUser: (signal) =>
@@ -78,6 +77,18 @@ export const api = {
       method: "DELETE",
     }),
 
+  // PROJECT SUPPORT EMAIL
+  // Main Admin / App Admin can update the email.
+  // The backend must enforce these permissions.
+
+  updateProjectSupportEmail: (projectId, email) =>
+    request(`${projectPath(projectId)}/support-email`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        support_email: email || null,
+      }),
+    }),
+
   // FEATURES
 
   getFeatures: (projectId, signal) =>
@@ -103,7 +114,9 @@ export const api = {
   // FEATURE GROUPS
 
   getFeatureGroups: (projectId, signal) =>
-    request(`${projectPath(projectId)}/feature-groups`, { signal }),
+    request(`${projectPath(projectId)}/feature-groups`, {
+      signal,
+    }),
 
   createFeatureGroup: (projectId, body) =>
     request(`${projectPath(projectId)}/feature-groups`, {
@@ -129,15 +142,12 @@ export const api = {
     }),
 
   addFeaturesToGroup: (projectId, groupId, featureIds) =>
-  request(
-    `${featureGroupPath(projectId, groupId)}/features`,
-    {
+    request(`${featureGroupPath(projectId, groupId)}/features`, {
       method: "POST",
       body: JSON.stringify({
         feature_ids: featureIds,
       }),
-    }
-  ),
+    }),
 
   removeFeatureFromGroup: (projectId, groupId, featureId) =>
     request(
@@ -148,9 +158,9 @@ export const api = {
         method: "DELETE",
       }
     ),
-  
-  ungroupFeature: (projectId,groupId,featureId) =>
-    api.removeFeatureFromGroup(projectId,groupId,featureId),
+
+  ungroupFeature: (projectId, groupId, featureId) =>
+    api.removeFeatureFromGroup(projectId, groupId, featureId),
 
   // PRIORITIZATION
 
@@ -163,5 +173,7 @@ export const api = {
   // RESULTS
 
   getResults: (projectId, signal) =>
-    request(`${projectPath(projectId)}/results`, { signal }),
+    request(`${projectPath(projectId)}/results`, {
+      signal,
+    }),
 };
