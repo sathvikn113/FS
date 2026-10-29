@@ -499,6 +499,7 @@ def list_feature_groups(project_id: str, db: Session = Depends(get_db)):
             "name": group.name,
             "description": group.description,
             "status": group.status,
+            "kind": group.kind,
             "implementation_started_at": group.implementation_started_at,
             "created_at": group.created_at,
             "features": [
@@ -526,14 +527,16 @@ def create_feature_group(
         raise HTTPException(status_code=400, detail="Every selected feature must belong to this project")
     if any(feature.group_id is not None for feature in selected):
         raise HTTPException(status_code=400, detail="A selected feature already belongs to a group")
-    if any(feature.status == "implemented" for feature in selected):
-        raise HTTPException(status_code=400, detail="Implemented features cannot be grouped")
+    if any(feature.status in {"implemented", "rejected"} for feature in selected):
+        raise HTTPException(status_code=400, detail="Implemented or rejected features cannot be grouped")
 
     group = FeatureGroup(
         id=new_id(),
         project_id=project_id,
         name=body.name,
         description=clean_optional_text(body.description),
+        status="pending",
+        kind=body.kind,
         created_by=admin.get("id"),
     )
     try:
@@ -552,9 +555,10 @@ def create_feature_group(
         "name": group.name,
         "description": group.description,
         "status": group.status,
+        "kind": group.kind,
         "implementation_started_at": group.implementation_started_at,
         "created_at": group.created_at,
-        "features": [{"id": f.id, "name": f.name, "description": f.description, "status": f.status} for f in selected],
+        "features": [{"id": f.id, "name": f.name, "description": f.description, "status": f.status, "implementation_started_at": f.implementation_started_at} for f in selected],
     }
 
 @app.post(
@@ -621,10 +625,10 @@ def add_features_to_group(
         )
 
     # Keep the existing rule that implemented features cannot be grouped.
-    if any(feature.status == "implemented" for feature in features):
+    if any(feature.status in {"implemented", "rejected"} for feature in features):
         raise HTTPException(
             status_code=400,
-            detail="Implemented features cannot be grouped",
+            detail="Implemented or rejected features cannot be grouped",
         )
 
     try:
@@ -654,19 +658,12 @@ def rename_feature_group(
     group = db.query(FeatureGroup).filter(FeatureGroup.id == group_id, FeatureGroup.project_id == project_id).first()
     if not group:
         raise HTTPException(status_code=404, detail="Feature group not found")
-    changes = body.model_dump(exclude_unset=True)
-    if not changes:
-        raise HTTPException(status_code=422, detail="Provide a group name or status change")
-    if "name" in changes and changes["name"] is None:
-        raise HTTPException(status_code=422, detail="Group name cannot be null")
-    if "status" in changes and changes["status"] is None:
-        raise HTTPException(status_code=422, detail="Group status cannot be null")
-    if changes.get("status") == "in_progress" and group.implementation_started_at is None:
-        group.implementation_started_at = datetime.now(timezone.utc)
-    for field, value in changes.items():
-        if field == "name":
-            value = value.strip()
-        setattr(group, field, value)
+    if body.name is not None:
+        group.name = body.name
+    if body.status is not None:
+        group.status = body.status
+        if body.status == "in_progress" and group.implementation_started_at is None:
+            group.implementation_started_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(group)
     return {
@@ -675,6 +672,7 @@ def rename_feature_group(
         "name": group.name,
         "description": group.description,
         "status": group.status,
+        "kind": group.kind,
         "implementation_started_at": group.implementation_started_at,
     }
 
@@ -737,6 +735,7 @@ def list_feature_groups(project_id: str, db: Session = Depends(get_db)):
             "name": group.name,
             "description": group.description,
             "status": group.status,
+            "kind": group.kind,
             "implementation_started_at": group.implementation_started_at,
             "created_at": group.created_at,
             "features": [
@@ -764,14 +763,16 @@ def create_feature_group(
         raise HTTPException(status_code=400, detail="Every selected feature must belong to this project")
     if any(feature.group_id is not None for feature in selected):
         raise HTTPException(status_code=400, detail="A selected feature already belongs to a group")
-    if any(feature.status == "implemented" for feature in selected):
-        raise HTTPException(status_code=400, detail="Implemented features cannot be grouped")
+    if any(feature.status in {"implemented", "rejected"} for feature in selected):
+        raise HTTPException(status_code=400, detail="Implemented or rejected features cannot be grouped")
 
     group = FeatureGroup(
         id=new_id(),
         project_id=project_id,
         name=body.name,
         description=clean_optional_text(body.description),
+        status="pending",
+        kind=body.kind,
         created_by=admin.get("id"),
     )
     try:
@@ -790,9 +791,10 @@ def create_feature_group(
         "name": group.name,
         "description": group.description,
         "status": group.status,
+        "kind": group.kind,
         "implementation_started_at": group.implementation_started_at,
         "created_at": group.created_at,
-        "features": [{"id": f.id, "name": f.name, "description": f.description, "status": f.status} for f in selected],
+        "features": [{"id": f.id, "name": f.name, "description": f.description, "status": f.status, "implementation_started_at": f.implementation_started_at} for f in selected],
     }
 
 
@@ -807,19 +809,12 @@ def rename_feature_group(
     group = db.query(FeatureGroup).filter(FeatureGroup.id == group_id, FeatureGroup.project_id == project_id).first()
     if not group:
         raise HTTPException(status_code=404, detail="Feature group not found")
-    changes = body.model_dump(exclude_unset=True)
-    if not changes:
-        raise HTTPException(status_code=422, detail="Provide a group name or status change")
-    if "name" in changes and changes["name"] is None:
-        raise HTTPException(status_code=422, detail="Group name cannot be null")
-    if "status" in changes and changes["status"] is None:
-        raise HTTPException(status_code=422, detail="Group status cannot be null")
-    if changes.get("status") == "in_progress" and group.implementation_started_at is None:
-        group.implementation_started_at = datetime.now(timezone.utc)
-    for field, value in changes.items():
-        if field == "name":
-            value = value.strip()
-        setattr(group, field, value)
+    if body.name is not None:
+        group.name = body.name
+    if body.status is not None:
+        group.status = body.status
+        if body.status == "in_progress" and group.implementation_started_at is None:
+            group.implementation_started_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(group)
     return {
@@ -828,6 +823,7 @@ def rename_feature_group(
         "name": group.name,
         "description": group.description,
         "status": group.status,
+        "kind": group.kind,
         "implementation_started_at": group.implementation_started_at,
     }
 
@@ -915,7 +911,7 @@ def add_feature(
         project_id=project_id,
         name=body.name,
         description=clean_optional_text(body.description),
-        status="planned",
+        status="pending",
     )
 
     db.add(feature)
@@ -1069,8 +1065,8 @@ def submit_response(
 
 
 def validate_response(body: ResponseIn, features: list[Feature], groups: list[FeatureGroup]) -> None:
-    active_features = [feature for feature in features if feature.status != "implemented"]
-    active_groups = [group for group in groups if any(f.status != "implemented" for f in group.features)]
+    active_features = [feature for feature in features if feature.status not in {"implemented", "rejected"}]
+    active_groups = [group for group in groups if group.status not in {"implemented", "rejected"} and any(f.status not in {"implemented", "rejected"} for f in group.features)]
     active_ungrouped = [feature for feature in active_features if feature.group_id is None]
     item_count = len(active_ungrouped) + len(active_groups)
     if item_count < 2:
@@ -1148,8 +1144,8 @@ def get_results(project_id: str, db: Session = Depends(get_db)):
             "groupId": group.id,
             "featureId": None,
             "name": group.name,
-            "status": group.status or "planned",
-            "implementationStartedAt": group.implementation_started_at,
+            "status": group.status,
+            "kind": group.kind,
             "features": [{"id": f.id, "name": f.name, "status": f.status, "implementationStartedAt": f.implementation_started_at} for f in member_features],
         })
     for feature in project.features:
@@ -1160,6 +1156,7 @@ def get_results(project_id: str, db: Session = Depends(get_db)):
                 "featureId": feature.id,
                 "name": feature.name,
                 "status": feature.status,
+                "kind": None,
                 "implementationStartedAt": feature.implementation_started_at,
                 "features": [],
             })

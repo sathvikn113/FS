@@ -41,7 +41,8 @@ class FeatureGroup(Base):
     project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
-    status = Column(String(20), nullable=False, default="planned", server_default="planned")
+    status = Column(String(20), nullable=False, default="pending", server_default="pending")
+    kind = Column(String(20), nullable=False, default="group", server_default="group")
     implementation_started_at = Column(DateTime(timezone=True), nullable=True)
     created_by = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -58,7 +59,7 @@ class Feature(Base):
     group_id = Column(String, ForeignKey("feature_groups.id", ondelete="SET NULL"), nullable=True, index=True)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
-    status = Column(String(20), nullable=False, default="planned", server_default="planned")
+    status = Column(String(20), nullable=False, default="pending", server_default="pending")
     implementation_started_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -115,7 +116,7 @@ class FeatureUpdate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=5000)
-    status: Literal["planned", "in_progress", "implemented"] | None = None
+    status: Literal["pending", "planned", "in_progress", "implemented", "rejected"] | None = None
 
     @field_validator("name")
     @classmethod
@@ -130,6 +131,7 @@ class FeatureGroupIn(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=5000)
     feature_ids: list[str] = Field(min_length=2)
+    kind: Literal["group", "depends"] = "group"
 
     @field_validator("name")
     @classmethod
@@ -147,7 +149,7 @@ class FeatureGroupIn(BaseModel):
 class FeatureGroupUpdate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    status: Literal["planned", "in_progress", "implemented"] | None = None
+    status: Literal["pending", "planned", "in_progress", "implemented", "rejected"] | None = None
 
     @field_validator("name")
     @classmethod

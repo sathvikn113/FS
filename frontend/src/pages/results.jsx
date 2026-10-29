@@ -28,9 +28,11 @@ import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { api } from "../api";
 
 const STATUS_LABELS = {
+  pending: "Pending",
   planned: "Planned",
   in_progress: "In progress",
   implemented: "Implemented",
+  rejected: "Rejected",
 };
 
 function StatCard({ icon, label, value, hint }) {
@@ -44,7 +46,7 @@ function StatCard({ icon, label, value, hint }) {
         background: "background.paper",
       }}
     >
-      <CardContent sx={{ p: { xs: 1.25, sm: 1.5 }, "&:last-child": { pb: { xs: 1.25, sm: 1.5 } } }}>
+      <CardContent sx={{ p: { xs: 1.5, sm: 1.75 }, "&:last-child": { pb: { xs: 1.5, sm: 1.75 } } }}>
         <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 0.75 }}>
           <Box
             sx={{
@@ -128,9 +130,7 @@ export default function Results() {
     return results.filter((item) => {
       // The API should return the group's own status (planned/in_progress/implemented),
       // not the generic value "group".
-      const status = item.status === "group"
-        ? item.groupStatus || item.statusValue || "planned"
-        : item.status || "planned";
+      const status = item.status || "pending";
       const share = Number(item.share ?? item.priority ?? 0);
 
       if (statusFilter !== "all" && status !== statusFilter) return false;
@@ -199,7 +199,7 @@ export default function Results() {
           >
             <StatCard
               icon={<InsightsRoundedIcon />}
-              label="Listed features"
+              label="Prioritization Items"
               value={results.length}
               hint="Active and implemented features"
             />
@@ -220,7 +220,7 @@ export default function Results() {
           {/* Compact results filters */}
           {results.length > 0 && (
             <Card variant="outlined" sx={{ borderRadius: 3, mb: 2, background: "background.paper" }}>
-              <CardContent sx={{ p: { xs: 1.25, sm: 1.5 }, "&:last-child": { pb: { xs: 1.25, sm: 1.5 } } }}>
+              <CardContent sx={{ p: { xs: 1.5, sm: 1.75 }, "&:last-child": { pb: { xs: 1.5, sm: 1.75 } } }}>
                 <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1.1 }}>
                   Filter results
                 </Typography>
@@ -240,9 +240,11 @@ export default function Results() {
                       onChange={(event) => setStatusFilter(event.target.value)}
                     >
                       <MenuItem value="all">All statuses</MenuItem>
+                      <MenuItem value="pending">Pending</MenuItem>
                       <MenuItem value="planned">Planned</MenuItem>
                       <MenuItem value="in_progress">In progress</MenuItem>
                       <MenuItem value="implemented">Implemented</MenuItem>
+                      <MenuItem value="rejected">Rejected</MenuItem>
                     </Select>
                   </FormControl>
 
@@ -257,6 +259,7 @@ export default function Results() {
                       <MenuItem value="any">Any percentage</MenuItem>
                       <MenuItem value="gt">Greater than (&gt;)</MenuItem>
                       <MenuItem value="lt">Less than (&lt;)</MenuItem>
+                      <MenuItem value="eq">Equal to (=)</MenuItem>
                     </Select>
                   </FormControl>
 
@@ -323,9 +326,7 @@ export default function Results() {
                 <Stack divider={<Box sx={{ borderBottom: "1px solid", borderColor: "divider" }} />}>
                   {filteredResults.map((item, index) => {
                     const share = Number(item.share ?? item.priority ?? 0);
-                    const rawStatus = item.status === "group"
-                      ? item.groupStatus || item.statusValue || "planned"
-                      : item.status || "planned";
+                    const rawStatus = item.status || "pending";
                     const status = STATUS_LABELS[rawStatus] || rawStatus;
                     const itemKey = item.groupId
                       ? `group:${item.groupId}`

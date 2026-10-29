@@ -37,9 +37,11 @@ import { api } from "../api";
 import { useAuth } from "../AuthContext.jsx";
 import FeatureCard from "../components/features/FeatureCard.jsx";
 const IMPLEMENTATION_STATUSES = [
+  { value: "pending", label: "Pending", color: "#94A3B8" },
   { value: "planned", label: "Planned", color: "#8B5CF6" },
   { value: "in_progress", label: "In Progress", color: "#FACC15" },
   { value: "implemented", label: "Implemented", color: "#22C55E" },
+  { value: "rejected", label: "Rejected", color: "#F87171" },
 ];
 import { useAllocation,createEqualAllocation } from "../hooks/useAllocation.js";
 import FeatureForm from "../components/features/FeatureForm.jsx";
@@ -74,6 +76,7 @@ export default function ProjectDetail() {
   const [featureGroups, setFeatureGroups] = useState([]);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [groupName, setGroupName] = useState("");
+  const [groupKind, setGroupKind] = useState("group");
   const [selectedFeatureIds, setSelectedFeatureIds] = useState([]);
   const [addToGroupId, setAddToGroupId] = useState(null);
   const [addToGroupFeatureIds, setAddToGroupFeatureIds] = useState([]);
@@ -118,17 +121,17 @@ export default function ProjectDetail() {
   const submitRef = useRef(false);
 
   const activeFeatures = useMemo(
-    () => features.filter((feature) => feature.status !== "implemented"),
+    () => features.filter((feature) => !["implemented", "rejected"].includes(feature.status)),
     [features]
   );
 
   const implementedFeatures = useMemo(
-    () => features.filter((feature) => feature.status === "implemented"),
+    () => features.filter((feature) => ["implemented", "rejected"].includes(feature.status)),
     [features]
   );
 
   const prioritizationItems = useMemo(() => {
-    const active = features.filter((feature) => feature.status !== "implemented");
+    const active = features.filter((feature) => !["implemented", "rejected"].includes(feature.status));
     const groupedIds = new Set(featureGroups.flatMap((group) => group.features.map((feature) => feature.id)));
     const ungrouped = active.filter((feature) => !groupedIds.has(feature.id) && !feature.group_id);
     const groups = featureGroups
@@ -136,13 +139,15 @@ export default function ProjectDetail() {
         id: `group:${group.id}`,
         groupId: group.id,
         name: group.name,
-        description: group.description || `${group.features.length} grouped features`,
-        status: group.status || "planned",
+        kind: group.kind || "group",
+        description: group.description || `${group.features.length} ${group.kind === "depends" ? "dependent features" : "grouped features"}`,
+        status: group.status || "pending",
+        kind: group.kind || "group",
         implementation_started_at: group.implementation_started_at,
         isGroup: true,
-        memberFeatures: group.features.filter((feature) => feature.status !== "implemented"),
+        memberFeatures: group.features.filter((feature) => !["implemented", "rejected"].includes(feature.status)),
       }))
-      .filter((group) => group.status !== "implemented" && group.memberFeatures.length > 0);
+      .filter((group) => !["implemented", "rejected"].includes(group.status) && group.memberFeatures.length > 0);
     return [...ungrouped, ...groups];
   }, [features, featureGroups]);
 
@@ -177,7 +182,7 @@ export default function ProjectDetail() {
 
   const filteredImplementedGroups = useMemo(
     () => featureGroups.filter((group) => {
-      if (group.status !== "implemented") return false;
+      if (!["implemented", "rejected"].includes(group.status)) return false;
       if (!normalizedFeatureSearch) return true;
       return (
         (group.name || "").toLowerCase().includes(normalizedFeatureSearch) ||
@@ -222,10 +227,10 @@ export default function ProjectDetail() {
         setFeatureGroups(groupData);
 
         const groupedIds = new Set(groupData.flatMap((group) => group.features.map((feature) => feature.id)));
-        const active = featureData.filter((feature) => feature.status !== "implemented");
+        const active = featureData.filter((feature) => !["implemented", "rejected"].includes(feature.status));
         const items = [
           ...active.filter((feature) => !feature.group_id && !groupedIds.has(feature.id)),
-          ...groupData.filter((group) => group.status !== "implemented" && group.features.some((feature) => feature.status !== "implemented")).map((group) => ({ id: `group:${group.id}` })),
+          ...groupData.filter((group) => !["implemented", "rejected"].includes(group.status) && group.features.some((feature) => !["implemented", "rejected"].includes(feature.status))).map((group) => ({ id: `group:${group.id}` })),
         ];
         setAllocation({ values: createEqualAllocation(items), pinnedIds: new Set() });
 
@@ -295,10 +300,10 @@ export default function ProjectDetail() {
   // Reinitialize equal shares for the remaining active features.
   const reconcile = (nextFeatures, _current, nextGroups = featureGroups) => {
     const groupedIds = new Set(nextGroups.flatMap((group) => group.features.map((feature) => feature.id)));
-    const active = nextFeatures.filter((feature) => feature.status !== "implemented");
+    const active = nextFeatures.filter((feature) => !["implemented", "rejected"].includes(feature.status));
     const items = [
       ...active.filter((feature) => !feature.group_id && !groupedIds.has(feature.id)),
-      ...nextGroups.filter((group) => group.status !== "implemented" && group.features.some((feature) => feature.status !== "implemented")).map((group) => ({ id: `group:${group.id}` })),
+      ...nextGroups.filter((group) => !["implemented", "rejected"].includes(group.status) && group.features.some((feature) => !["implemented", "rejected"].includes(feature.status))).map((group) => ({ id: `group:${group.id}` })),
     ];
     return { values: createEqualAllocation(items), pinnedIds: new Set() };
   };
@@ -433,8 +438,9 @@ export default function ProjectDetail() {
   const createFeatureGroup = async (event) => {
     event?.preventDefault();
     if (!canManageFeatures || !groupName.trim() || selectedFeatureIds.length < 2) return;
-    await runMutation("create-feature-group", () => api.createFeatureGroup(id, {
-      name: groupName.trim(), feature_ids: selectedFeatureIds,
+    const actionKey = groupKind === "depends" ? "create-dependency-set" : "create-feature-group";
+    await runMutation(actionKey, () => api.createFeatureGroup(id, {
+      name: groupName.trim(), feature_ids: selectedFeatureIds, kind: groupKind,
     }), (createdGroup) => {
       const nextGroups = [...featureGroups, createdGroup];
       setFeatureGroups(nextGroups);
@@ -455,6 +461,7 @@ export default function ProjectDetail() {
       });
       setGroupDialogOpen(false);
       setGroupName("");
+      setGroupKind("group");
       setSelectedFeatureIds([]);
     });
   };
@@ -861,10 +868,15 @@ const renderFeature = (feature, implemented = false) => {
               label={`${prioritizationItems.length} active items`}
               variant="outlined"
             />
-            {canManageFeatures && activeFeatures.filter((feature) => !feature.group_id && feature.status !== "implemented").length >= 2 && (
-              <Button size="small" variant="outlined" onClick={() => setGroupDialogOpen(true)}>
-                Group features
-              </Button>
+            {canManageFeatures && activeFeatures.filter((feature) => !feature.group_id && !["implemented", "rejected"].includes(feature.status)).length >= 2 && (
+              <Stack direction="row" spacing={1}>
+                <Button size="small" variant="outlined" onClick={() => { setGroupKind("group"); setGroupDialogOpen(true); }}>
+                  Group features
+                </Button>
+                <Button size="small" variant="outlined" onClick={() => { setGroupKind("depends"); setGroupDialogOpen(true); }}>
+                  Add dependency
+                </Button>
+              </Stack>
             )}
           </Stack>
 
@@ -951,10 +963,10 @@ const renderFeature = (feature, implemented = false) => {
             </Stack>
           )}
 
-          {featureGroups.filter((group) => group.status !== "implemented" && group.features.some((feature) => feature.status !== "implemented") && (!normalizedFeatureSearch || group.name.toLowerCase().includes(normalizedFeatureSearch) || group.features.some((feature) => `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)))).map((group) => {
+          {featureGroups.filter((group) => !["implemented", "rejected"].includes(group.status) && group.features.some((feature) => !["implemented", "rejected"].includes(feature.status)) && (!normalizedFeatureSearch || group.name.toLowerCase().includes(normalizedFeatureSearch) || group.features.some((feature) => `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)))).map((group) => {
             const groupItem = prioritizationItems.find((item) => item.groupId === group.id);
             if (!groupItem) return null;
-            const members = group.features.filter((feature) => feature.status !== "implemented" && (!normalizedFeatureSearch || group.name.toLowerCase().includes(normalizedFeatureSearch) || `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)));
+            const members = group.features.filter((feature) => !["implemented", "rejected"].includes(feature.status) && (!normalizedFeatureSearch || group.name.toLowerCase().includes(normalizedFeatureSearch) || `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)));
             return (
               <Box key={group.id} sx={{ borderTop: "1px solid", borderColor: "divider", pb: 0.25 }}>
                 <Stack direction="row" justifyContent="flex-end" sx={{ pt: 1, px: 1 }}>
@@ -994,7 +1006,7 @@ const renderFeature = (feature, implemented = false) => {
             );
           })}
 
-          {filteredActiveFeatures.length === 0 && !featureGroups.some((group) => group.status !== "implemented" && group.features.some((feature) => feature.status !== "implemented") && (!normalizedFeatureSearch || group.name.toLowerCase().includes(normalizedFeatureSearch) || group.features.some((feature) => `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)))) ? (
+          {filteredActiveFeatures.length === 0 && !featureGroups.some((group) => !["implemented", "rejected"].includes(group.status) && group.features.some((feature) => !["implemented", "rejected"].includes(feature.status)) && (!normalizedFeatureSearch || group.name.toLowerCase().includes(normalizedFeatureSearch) || group.features.some((feature) => `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)))) ? (
             <Box
               sx={{
                 py: 4,
@@ -1058,7 +1070,7 @@ const renderFeature = (feature, implemented = false) => {
                   variant="subtitle1"
                   fontWeight={650}
                 >
-                  Implemented ({filteredImplementedFeatures.length + filteredImplementedGroups.length})
+                  Completed / Rejected ({filteredImplementedFeatures.length + filteredImplementedGroups.length})
                 </Typography>
               </AccordionSummary>
 
@@ -1081,7 +1093,7 @@ const renderFeature = (feature, implemented = false) => {
                       id: `group:${group.id}`,
                       groupId: group.id,
                       name: group.name,
-                      description: group.description || `${group.features.length} grouped features`,
+                      description: group.description || `${group.features.length} ${group.kind === "depends" ? "dependent features" : "grouped features"}`,
                       status: group.status || "implemented",
                       implementation_started_at: group.implementation_started_at,
                       isGroup: true,
@@ -1195,10 +1207,10 @@ const renderFeature = (feature, implemented = false) => {
 
 <Dialog open={groupDialogOpen} onClose={() => !pendingAction && setGroupDialogOpen(false)} fullWidth maxWidth="sm">
   <Box component="form" onSubmit={createFeatureGroup}>
-    <DialogTitle>Group features</DialogTitle>
+    <DialogTitle>{groupKind === "depends" ? "Create dependency set" : "Group features"}</DialogTitle>
     <DialogContent>
-      <DialogContentText sx={{ mb: 2 }}>Choose at least two ungrouped, active features. Existing historical allocations are preserved and attributed to the group in results.</DialogContentText>
-      <TextField fullWidth required label="Group name" value={groupName} onChange={(event) => setGroupName(event.target.value)} sx={{ mb: 2 }} inputProps={{ maxLength: 255 }} />
+      <DialogContentText sx={{ mb: 2 }}>Choose at least two ungrouped, active features. This set will receive one allocation slider and count as one prioritization item.</DialogContentText>
+      <TextField fullWidth required label={groupKind === "depends" ? "Dependency name" : "Group name"} value={groupName} onChange={(event) => setGroupName(event.target.value)} sx={{ mb: 2 }} inputProps={{ maxLength: 255 }} />
       <FormGroup>
         {activeFeatures.filter((feature) => !feature.group_id && !featureGroups.some((group) => group.features.some((member) => member.id === feature.id))).map((feature) => (
           <FormControlLabel key={feature.id} control={<Checkbox checked={selectedFeatureIds.includes(feature.id)} onChange={(event) => setSelectedFeatureIds((current) => event.target.checked ? [...current, feature.id] : current.filter((value) => value !== feature.id))} />} label={feature.name} />
@@ -1207,7 +1219,7 @@ const renderFeature = (feature, implemented = false) => {
     </DialogContent>
     <DialogActions>
       <Button onClick={() => setGroupDialogOpen(false)} disabled={Boolean(pendingAction)}>Cancel</Button>
-      <Button type="submit" variant="contained" disabled={!groupName.trim() || selectedFeatureIds.length < 2 || Boolean(pendingAction)}>{pendingAction === "create-feature-group" ? "Creating…" : "Create group"}</Button>
+      <Button type="submit" variant="contained" disabled={!groupName.trim() || selectedFeatureIds.length < 2 || Boolean(pendingAction)}>{pendingAction === "create-feature-group" || pendingAction === "create-dependency-set" ? "Creating…" : groupKind === "depends" ? "Create dependency" : "Create group"}</Button>
     </DialogActions>
   </Box>
 </Dialog>
