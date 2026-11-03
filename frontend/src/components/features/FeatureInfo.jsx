@@ -8,9 +8,9 @@ export default function FeatureInfo({
     <Box sx={{ flex: 1, minWidth: 0 }}>
       <Typography
         component="h3"
-        variant="body2"
-        fontWeight={700}
-        sx={{ overflowWrap: "anywhere" }}
+        variant="subtitle2"
+        fontWeight={800}
+        sx={{ fontSize: "0.98rem", lineHeight: 1.35, overflowWrap: "anywhere" }}
       >
         {feature.name}
       </Typography>

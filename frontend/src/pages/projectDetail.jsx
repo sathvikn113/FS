@@ -18,6 +18,7 @@ import {
   DialogContentText,
   DialogTitle,
   LinearProgress,
+  MenuItem,
   Skeleton,
   Stack,
   TextField,
@@ -74,6 +75,12 @@ export default function ProjectDetail() {
   const [project, setProject] = useState(null);
   const [features, setFeatures] = useState([]);
   const [featureGroups, setFeatureGroups] = useState([]);
+  const [dependencyRows, setDependencyRows] = useState([]);
+  const [dependencyDialogOpen, setDependencyDialogOpen] = useState(false);
+  const [dependencyParentType, setDependencyParentType] = useState("feature");
+  const [dependencyParentId, setDependencyParentId] = useState("");
+  const [dependencyChildType, setDependencyChildType] = useState("feature");
+  const [dependencyChildId, setDependencyChildId] = useState("");
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [groupName, setGroupName] = useState("");
   const [groupKind, setGroupKind] = useState("group");
@@ -133,7 +140,8 @@ export default function ProjectDetail() {
   const prioritizationItems = useMemo(() => {
     const active = features.filter((feature) => !["implemented", "rejected"].includes(feature.status));
     const groupedIds = new Set(featureGroups.flatMap((group) => group.features.map((feature) => feature.id)));
-    const ungrouped = active.filter((feature) => !groupedIds.has(feature.id) && !feature.group_id);
+    const dependencyChildKeys = new Set(dependencyRows.map((row) => `${row.child_type}:${row.child_id}`));
+    const ungrouped = active.filter((feature) => !groupedIds.has(feature.id) && !feature.group_id && !dependencyChildKeys.has(`feature:${feature.id}`));
     const groups = featureGroups
       .map((group) => ({
         id: `group:${group.id}`,
@@ -147,9 +155,9 @@ export default function ProjectDetail() {
         isGroup: true,
         memberFeatures: group.features.filter((feature) => !["implemented", "rejected"].includes(feature.status)),
       }))
-      .filter((group) => !["implemented", "rejected"].includes(group.status) && group.memberFeatures.length > 0);
+      .filter((group) => !["implemented", "rejected"].includes(group.status) && group.memberFeatures.length > 0 && !dependencyChildKeys.has(`group:${group.groupId}`));
     return [...ungrouped, ...groups];
-  }, [features, featureGroups]);
+  }, [features, featureGroups, dependencyRows]);
 
   const normalizedFeatureSearch = featureSearch.trim().toLowerCase();
 
@@ -157,14 +165,16 @@ export default function ProjectDetail() {
     () =>
       activeFeatures.filter((feature) => {
         if (feature.group_id || featureGroups.some((group) => group.features.some((member) => member.id === feature.id))) return false;
+        if (dependencyRows.some((row) => row.child_type === "feature" && row.child_id === feature.id)) return false;
+        const childText = dependencyRows.filter((row) => row.parent_type === "feature" && row.parent_id === feature.id).map((row) => row.child_name || "").join(" ");
         if (!normalizedFeatureSearch) return true;
-
         return (
           (feature.name || "").toLowerCase().includes(normalizedFeatureSearch) ||
-          (feature.description || "").toLowerCase().includes(normalizedFeatureSearch)
+          (feature.description || "").toLowerCase().includes(normalizedFeatureSearch) ||
+          childText.toLowerCase().includes(normalizedFeatureSearch)
         );
       }),
-    [activeFeatures, normalizedFeatureSearch, featureGroups]
+    [activeFeatures, normalizedFeatureSearch, featureGroups, dependencyRows]
   );
 
   const filteredImplementedFeatures = useMemo(
@@ -188,10 +198,10 @@ export default function ProjectDetail() {
         (group.name || "").toLowerCase().includes(normalizedFeatureSearch) ||
         group.features.some((feature) =>
           `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)
-        )
+        ) || dependencyRows.some((row) => row.parent_type === "group" && row.parent_id === group.id && (row.child_name || "").toLowerCase().includes(normalizedFeatureSearch))
       );
     }),
-    [featureGroups, normalizedFeatureSearch]
+    [featureGroups, normalizedFeatureSearch, dependencyRows]
   );
 
   const activeTotal = useMemo(
@@ -214,23 +224,35 @@ export default function ProjectDetail() {
 
     async function loadProjectData() {
       try {
+        // Load the core project data first. A dependency-endpoint failure should
+        // not prevent the rest of the project detail page from rendering.
         const [projectData, featureData, groupData] = await Promise.all([
           api.getProject(id, controller.signal),
           api.getFeatures(id, controller.signal),
           api.getFeatureGroups(id, controller.signal),
         ]);
 
+        let dependencyData = [];
+        try {
+          dependencyData = await api.getDependencies(id, controller.signal);
+        } catch (dependencyError) {
+          if (controller.signal.aborted) return;
+          console.error("Unable to load project dependencies:", dependencyError);
+        }
+
         if (!current) return;
 
         setProject(projectData);
         setFeatures(featureData);
         setFeatureGroups(groupData);
+        setDependencyRows(dependencyData || []);
 
+        const dependencyChildKeys = new Set((dependencyData || []).map((row) => `${row.child_type}:${row.child_id}`));
         const groupedIds = new Set(groupData.flatMap((group) => group.features.map((feature) => feature.id)));
         const active = featureData.filter((feature) => !["implemented", "rejected"].includes(feature.status));
         const items = [
-          ...active.filter((feature) => !feature.group_id && !groupedIds.has(feature.id)),
-          ...groupData.filter((group) => !["implemented", "rejected"].includes(group.status) && group.features.some((feature) => !["implemented", "rejected"].includes(feature.status))).map((group) => ({ id: `group:${group.id}` })),
+          ...active.filter((feature) => !feature.group_id && !groupedIds.has(feature.id) && !dependencyChildKeys.has(`feature:${feature.id}`)),
+          ...groupData.filter((group) => !["implemented", "rejected"].includes(group.status) && group.features.some((feature) => !["implemented", "rejected"].includes(feature.status)) && !dependencyChildKeys.has(`group:${group.id}`)).map((group) => ({ id: `group:${group.id}` })),
         ];
         setAllocation({ values: createEqualAllocation(items), pinnedIds: new Set() });
 
@@ -298,12 +320,13 @@ export default function ProjectDetail() {
 
   // Keep allocation state valid when the feature list changes.
   // Reinitialize equal shares for the remaining active features.
-  const reconcile = (nextFeatures, _current, nextGroups = featureGroups) => {
+  const reconcile = (nextFeatures, _current, nextGroups = featureGroups, nextDependencies = dependencyRows) => {
+    const dependencyChildKeys = new Set(nextDependencies.map((row) => `${row.child_type}:${row.child_id}`));
     const groupedIds = new Set(nextGroups.flatMap((group) => group.features.map((feature) => feature.id)));
     const active = nextFeatures.filter((feature) => !["implemented", "rejected"].includes(feature.status));
     const items = [
-      ...active.filter((feature) => !feature.group_id && !groupedIds.has(feature.id)),
-      ...nextGroups.filter((group) => !["implemented", "rejected"].includes(group.status) && group.features.some((feature) => !["implemented", "rejected"].includes(feature.status))).map((group) => ({ id: `group:${group.id}` })),
+      ...active.filter((feature) => !feature.group_id && !groupedIds.has(feature.id) && !dependencyChildKeys.has(`feature:${feature.id}`)),
+      ...nextGroups.filter((group) => !["implemented", "rejected"].includes(group.status) && group.features.some((feature) => !["implemented", "rejected"].includes(feature.status)) && !dependencyChildKeys.has(`group:${group.id}`)).map((group) => ({ id: `group:${group.id}` })),
     ];
     return { values: createEqualAllocation(items), pinnedIds: new Set() };
   };
@@ -382,7 +405,9 @@ export default function ProjectDetail() {
       () => feature.isGroup
         ? api.updateFeatureGroup(id, feature.groupId, { status })
         : api.updateFeature(id, feature.id, { status }),
-      (updated) => {
+      async (updated) => {
+        const latestDependencies = await api.getDependencies(id);
+        setDependencyRows(latestDependencies || []);
         if (feature.isGroup) {
           const nextGroups = featureGroups.map((group) =>
             group.id === feature.groupId
@@ -395,7 +420,7 @@ export default function ProjectDetail() {
               : group
           );
           setFeatureGroups(nextGroups);
-          setAllocation((current) => reconcile(features, current, nextGroups));
+          setAllocation((current) => reconcile(features, current, nextGroups, latestDependencies || []));
           return;
         }
 
@@ -410,7 +435,7 @@ export default function ProjectDetail() {
             item.id === updated.id ? updated : item
           );
 
-          return reconcile(nextFeatures, current);
+          return reconcile(nextFeatures, current, featureGroups, latestDependencies || []);
         });
       }
     );
@@ -438,9 +463,9 @@ export default function ProjectDetail() {
   const createFeatureGroup = async (event) => {
     event?.preventDefault();
     if (!canManageFeatures || !groupName.trim() || selectedFeatureIds.length < 2) return;
-    const actionKey = groupKind === "depends" ? "create-dependency-set" : "create-feature-group";
+    const actionKey = "create-feature-group";
     await runMutation(actionKey, () => api.createFeatureGroup(id, {
-      name: groupName.trim(), feature_ids: selectedFeatureIds, kind: groupKind,
+      name: groupName.trim(), feature_ids: selectedFeatureIds, kind: "group",
     }), (createdGroup) => {
       const nextGroups = [...featureGroups, createdGroup];
       setFeatureGroups(nextGroups);
@@ -463,6 +488,48 @@ export default function ProjectDetail() {
       setGroupName("");
       setGroupKind("group");
       setSelectedFeatureIds([]);
+    });
+  };
+
+  const dependencyChoices = (type) => {
+    if (type === "feature") {
+      const groupedIds = new Set(featureGroups.flatMap((group) => group.features.map((feature) => feature.id)));
+      return activeFeatures
+        .filter((item) => !item.group_id && !groupedIds.has(item.id))
+        .map((item) => ({ id: item.id, name: item.name }));
+    }
+    return featureGroups
+      .filter((group) =>
+        !["implemented", "rejected"].includes(group.status) &&
+        group.features.some((feature) => !["implemented", "rejected"].includes(feature.status))
+      )
+      .map((item) => ({ id: item.id, name: item.name }));
+  };
+
+  const createDependency = async (event) => {
+    event?.preventDefault();
+    if (!canManageFeatures || !dependencyParentId || !dependencyChildId) return;
+    await runMutation("create-dependency", () => api.createDependency(id, {
+      parent_type: dependencyParentType,
+      parent_id: dependencyParentId,
+      child_type: dependencyChildType,
+      child_id: dependencyChildId,
+    }), async (created) => {
+      const nextDependencies = [...dependencyRows, created];
+      setDependencyRows(nextDependencies);
+      setAllocation((current) => reconcile(features, current, featureGroups, nextDependencies));
+      setDependencyDialogOpen(false);
+      setDependencyParentId("");
+      setDependencyChildId("");
+    });
+  };
+
+  const removeDependency = async (dependency) => {
+    if (!canManageFeatures) return;
+    await runMutation(`delete-dependency-${dependency.id}`, () => api.deleteDependency(id, dependency.id), () => {
+      const nextDependencies = dependencyRows.filter((row) => row.id !== dependency.id);
+      setDependencyRows(nextDependencies);
+      setAllocation((current) => reconcile(features, current, featureGroups, nextDependencies));
     });
   };
 
@@ -675,26 +742,60 @@ const {
   }
 
 const renderFeature = (feature, implemented = false) => {
+  const parentType = feature.isGroup ? "group" : "feature";
+  const parentId = feature.isGroup ? feature.groupId : feature.id;
+  const children = dependencyRows.filter((row) => row.parent_type === parentType && row.parent_id === parentId);
   return (
-    <FeatureCard
-      key={feature.id}
-      feature={feature}
-      implemented={implemented}
-      allocation={allocation}
-      formatStartDate={formatStartDate}
-      IMPLEMENTATION_STATUSES={IMPLEMENTATION_STATUSES}
-      canManageFeatures={canManageFeatures}
-      pendingAction={pendingAction}
-      submitting={submitting}
-      statusAnchor={statusAnchor}
-      setStatusAnchor={setStatusAnchor}
-      selectedStatusFeature={selectedStatusFeature}
-      setSelectedStatusFeature={setSelectedStatusFeature}
-      updateStatus={updateStatus}
-      openEditor={openEditor}
-      setDeleteTarget={setDeleteTarget}
-      updatePercentage={updatePercentage}
-    />
+    <Box key={`${parentType}-${parentId}`}>
+      <FeatureCard
+        feature={feature}
+        implemented={implemented}
+        allocation={allocation}
+        formatStartDate={formatStartDate}
+        IMPLEMENTATION_STATUSES={IMPLEMENTATION_STATUSES}
+        canManageFeatures={canManageFeatures}
+        pendingAction={pendingAction}
+        submitting={submitting}
+        statusAnchor={statusAnchor}
+        setStatusAnchor={setStatusAnchor}
+        selectedStatusFeature={selectedStatusFeature}
+        setSelectedStatusFeature={setSelectedStatusFeature}
+        updateStatus={updateStatus}
+        openEditor={openEditor}
+        setDeleteTarget={setDeleteTarget}
+        updatePercentage={updatePercentage}
+      />
+      {children.length > 0 && (
+        <Box sx={{ ml: { xs: 1.5, sm: 3 }, mt: 0.5, mb: 1.25, pl: 1.5, borderLeft: "3px solid", borderColor: "warning.main", bgcolor: "action.hover", borderRadius: 1, py: 1, pr: 1.25 }}>
+          <Typography variant="caption" color="warning.main" fontWeight={750} sx={{ display: "block", mb: 0.75 }}>
+            DEPENDS ON THIS FIRST
+          </Typography>
+          <Stack spacing={0.75}>
+            {children.map((child) => {
+              const childGroup = child.child_type === "group" ? featureGroups.find((group) => group.id === child.child_id) : null;
+              const childFeature = child.child_type === "feature" ? features.find((item) => item.id === child.child_id) : null;
+              const childLabel = child.child_name || childGroup?.name || childFeature?.name || "Dependent item";
+              return (
+                <Stack key={child.id} direction="row" spacing={1} sx={{ alignItems: "center", justifyContent: "space-between" }}>
+                  <Box sx={{ minWidth: 0 }}>
+                    <Typography variant="body2" fontWeight={650}>{childLabel}</Typography>
+                    <Typography variant="caption" color="text.secondary">{child.child_type === "group" ? "Dependent feature group" : "Dependent feature"} · Locked from separate prioritization</Typography>
+                    {childGroup?.features?.length > 0 && (
+                      <Stack spacing={0.25} sx={{ mt: 0.5, pl: 1.25, borderLeft: "2px solid", borderColor: "divider" }}>
+                        {childGroup.features.map((member) => (
+                          <Typography key={member.id} variant="caption" color="text.secondary">{member.name}</Typography>
+                        ))}
+                      </Stack>
+                    )}
+                  </Box>
+                  {canManageFeatures && <Button size="small" color="inherit" onClick={() => removeDependency(child)} disabled={Boolean(pendingAction)}>Remove</Button>}
+                </Stack>
+              );
+            })}
+          </Stack>
+        </Box>
+      )}
+    </Box>
   );
 };
 
@@ -868,12 +969,12 @@ const renderFeature = (feature, implemented = false) => {
               label={`${prioritizationItems.length} active items`}
               variant="outlined"
             />
-            {canManageFeatures && activeFeatures.filter((feature) => !feature.group_id && !["implemented", "rejected"].includes(feature.status)).length >= 2 && (
+            {canManageFeatures && (
               <Stack direction="row" spacing={1}>
                 <Button size="small" variant="outlined" onClick={() => { setGroupKind("group"); setGroupDialogOpen(true); }}>
                   Group features
                 </Button>
-                <Button size="small" variant="outlined" onClick={() => { setGroupKind("depends"); setGroupDialogOpen(true); }}>
+                <Button size="small" variant="outlined" onClick={() => { setDependencyParentType("feature"); setDependencyChildType("feature"); setDependencyParentId(""); setDependencyChildId(""); setDependencyDialogOpen(true); }}>
                   Add dependency
                 </Button>
               </Stack>
@@ -1207,10 +1308,10 @@ const renderFeature = (feature, implemented = false) => {
 
 <Dialog open={groupDialogOpen} onClose={() => !pendingAction && setGroupDialogOpen(false)} fullWidth maxWidth="sm">
   <Box component="form" onSubmit={createFeatureGroup}>
-    <DialogTitle>{groupKind === "depends" ? "Create dependency set" : "Group features"}</DialogTitle>
+    <DialogTitle>Group features</DialogTitle>
     <DialogContent>
-      <DialogContentText sx={{ mb: 2 }}>Choose at least two ungrouped, active features. This set will receive one allocation slider and count as one prioritization item.</DialogContentText>
-      <TextField fullWidth required label={groupKind === "depends" ? "Dependency name" : "Group name"} value={groupName} onChange={(event) => setGroupName(event.target.value)} sx={{ mb: 2 }} inputProps={{ maxLength: 255 }} />
+      <DialogContentText sx={{ mb: 2 }}>Choose at least two ungrouped, active features. This group will receive one allocation slider.</DialogContentText>
+      <TextField fullWidth required label="Group name" value={groupName} onChange={(event) => setGroupName(event.target.value)} sx={{ mb: 2 }} inputProps={{ maxLength: 255 }} />
       <FormGroup>
         {activeFeatures.filter((feature) => !feature.group_id && !featureGroups.some((group) => group.features.some((member) => member.id === feature.id))).map((feature) => (
           <FormControlLabel key={feature.id} control={<Checkbox checked={selectedFeatureIds.includes(feature.id)} onChange={(event) => setSelectedFeatureIds((current) => event.target.checked ? [...current, feature.id] : current.filter((value) => value !== feature.id))} />} label={feature.name} />
@@ -1219,7 +1320,34 @@ const renderFeature = (feature, implemented = false) => {
     </DialogContent>
     <DialogActions>
       <Button onClick={() => setGroupDialogOpen(false)} disabled={Boolean(pendingAction)}>Cancel</Button>
-      <Button type="submit" variant="contained" disabled={!groupName.trim() || selectedFeatureIds.length < 2 || Boolean(pendingAction)}>{pendingAction === "create-feature-group" || pendingAction === "create-dependency-set" ? "Creating…" : groupKind === "depends" ? "Create dependency" : "Create group"}</Button>
+      <Button type="submit" variant="contained" disabled={!groupName.trim() || selectedFeatureIds.length < 2 || Boolean(pendingAction)}>{pendingAction === "create-feature-group" ? "Creating…" : "Create group"}</Button>
+    </DialogActions>
+  </Box>
+</Dialog>
+
+<Dialog open={dependencyDialogOpen} onClose={() => !pendingAction && setDependencyDialogOpen(false)} fullWidth maxWidth="sm">
+  <Box component="form" onSubmit={createDependency}>
+    <DialogTitle>Create dependency</DialogTitle>
+    <DialogContent>
+      <DialogContentText sx={{ mb: 2 }}></DialogContentText>
+      <Stack spacing={2}>
+        <TextField select fullWidth label="Parent type" value={dependencyParentType} onChange={(event) => { setDependencyParentType(event.target.value); setDependencyParentId(""); }}>
+          <MenuItem value="feature">Feature</MenuItem><MenuItem value="group">Feature group</MenuItem>
+        </TextField>
+        <TextField select fullWidth label="Parent item" value={dependencyParentId} onChange={(event) => setDependencyParentId(event.target.value)}>
+          {dependencyChoices(dependencyParentType).map((item) => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+        </TextField>
+        <TextField select fullWidth label="Dependent item type" value={dependencyChildType} onChange={(event) => { setDependencyChildType(event.target.value); setDependencyChildId(""); }}>
+          <MenuItem value="feature">Feature</MenuItem><MenuItem value="group">Feature group</MenuItem>
+        </TextField>
+        <TextField select fullWidth label="Dependent item" value={dependencyChildId} onChange={(event) => setDependencyChildId(event.target.value)}>
+          {dependencyChoices(dependencyChildType).map((item) => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+        </TextField>
+      </Stack>
+    </DialogContent>
+    <DialogActions>
+      <Button onClick={() => setDependencyDialogOpen(false)} disabled={Boolean(pendingAction)}>Cancel</Button>
+      <Button type="submit" variant="contained" disabled={!dependencyParentId || !dependencyChildId || (dependencyParentType === dependencyChildType && dependencyParentId === dependencyChildId) || Boolean(pendingAction)}>{pendingAction === "create-dependency" ? "Creating…" : "Create dependency"}</Button>
     </DialogActions>
   </Box>
 </Dialog>

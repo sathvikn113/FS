@@ -1,184 +1,136 @@
 const BASE_URL = "http://localhost:8000/api";
 
 async function request(path, options = {}) {
-  let response;
-
-  try {
-    response = await fetch(`${BASE_URL}${path}`, {
-      ...options,
-      credentials: "include",
-      headers: {
-        ...(options.body ? { "Content-Type": "application/json" } : {}),
-        ...(options.headers || {}),
-      },
-    });
-  } catch {
-    throw new Error(
-      "The server could not be reached. Check that the backend is running and try again."
-    );
-  }
-
-  let data = null;
-
-  try {
-    data = await response.json();
-  } catch {
-    data = null;
-  }
+  const response = await fetch(`${BASE_URL}${path}`, {
+    ...options,
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
 
   if (!response.ok) {
-    const error = new Error(
-      data?.detail ||
-        data?.message ||
-        `Request failed with status ${response.status}`
-    );
+    let message = "Something went wrong";
 
-    error.status = response.status;
-    throw error;
+    try {
+      const error = await response.json();
+      message = error.detail || message;
+    } catch {
+      message = response.statusText || message;
+    }
+
+    throw new Error(message);
   }
 
-  return data;
+  if (response.status === 204) return null;
+
+  return response.json();
 }
 
-const projectPath = (projectId) =>
-  `/projects/${encodeURIComponent(projectId)}`;
-
-const featurePath = (projectId, featureId) =>
-  `${projectPath(projectId)}/features/${encodeURIComponent(featureId)}`;
-
-const featureGroupPath = (projectId, groupId) =>
-  `${projectPath(projectId)}/feature-groups/${encodeURIComponent(groupId)}`;
-
 export const api = {
-  // AUTHENTICATION
+  getCurrentUser: (signal) => request("/auth/me", { signal }),
 
-  getCurrentUser: (signal) =>
-    request("/auth/me", { signal }),
-
-  // PROJECTS
-
-  getProjects: (signal) =>
-    request("/projects", { signal }),
+  getProjects: (signal) => request("/projects", { signal }),
 
   getProject: (projectId, signal) =>
-    request(projectPath(projectId), { signal }),
+    request(`/projects/${projectId}`, { signal }),
 
-  getProjectPermissions: (projectId, signal) =>
-    request(`${projectPath(projectId)}/permissions`, { signal }),
-
-  createProject: (body) =>
+  createProject: (payload) =>
     request("/projects", {
       method: "POST",
-      body: JSON.stringify(body),
+      body: JSON.stringify(payload),
     }),
 
   deleteProject: (projectId) =>
-    request(projectPath(projectId), {
-      method: "DELETE",
-    }),
+    request(`/projects/${projectId}`, { method: "DELETE" }),
 
-  // PROJECT SUPPORT EMAIL
+  getProjectPermissions: (projectId, signal) =>
+    request(`/projects/${projectId}/permissions`, { signal }),
 
   updateProjectSupportEmail: (projectId, email) =>
-    request(`${projectPath(projectId)}/support-email`, {
+    request(`/projects/${projectId}/support-email`, {
       method: "PATCH",
-      body: JSON.stringify({
-        support_email: email || null,
-      }),
+      body: JSON.stringify({ support_email: email }),
     }),
 
-  // FEATURES
-
+  // Features
   getFeatures: (projectId, signal) =>
-    request(`${projectPath(projectId)}/features`, { signal }),
+    request(`/projects/${projectId}/features`, { signal }),
 
-  addFeature: (projectId, body) =>
-    request(`${projectPath(projectId)}/features`, {
+  addFeature: (projectId, payload) =>
+    request(`/projects/${projectId}/features`, {
       method: "POST",
-      body: JSON.stringify(body),
+      body: JSON.stringify(payload),
     }),
 
-  updateFeature: (projectId, featureId, body) =>
-    request(featurePath(projectId, featureId), {
+  updateFeature: (projectId, featureId, payload) =>
+    request(`/projects/${projectId}/features/${featureId}`, {
       method: "PATCH",
-      body: JSON.stringify(body),
+      body: JSON.stringify(payload),
     }),
 
   deleteFeature: (projectId, featureId) =>
-    request(featurePath(projectId, featureId), {
+    request(`/projects/${projectId}/features/${featureId}`, {
       method: "DELETE",
     }),
 
-  // FEATURE GROUPS
-
+  // Feature Groups
   getFeatureGroups: (projectId, signal) =>
-    request(`${projectPath(projectId)}/feature-groups`, {
-      signal,
-    }),
+    request(`/projects/${projectId}/feature-groups`, { signal }),
 
-  createFeatureGroup: (projectId, body) =>
-    request(`${projectPath(projectId)}/feature-groups`, {
+  createFeatureGroup: (projectId, payload) =>
+    request(`/projects/${projectId}/feature-groups`, {
       method: "POST",
-      body: JSON.stringify(body),
+      body: JSON.stringify(payload),
     }),
 
-  updateFeatureGroup: (projectId, groupId, body) =>
-    request(featureGroupPath(projectId, groupId), {
+  updateFeatureGroup: (projectId, groupId, payload) =>
+    request(`/projects/${projectId}/feature-groups/${groupId}`, {
       method: "PATCH",
-      body: JSON.stringify(body),
+      body: JSON.stringify(payload),
     }),
 
   deleteFeatureGroup: (projectId, groupId) =>
-    request(featureGroupPath(projectId, groupId), {
+    request(`/projects/${projectId}/feature-groups/${groupId}`, {
       method: "DELETE",
     }),
 
-  addFeatureToGroup: (projectId, groupId, body) =>
-    request(`${featureGroupPath(projectId, groupId)}/features`, {
+  addFeatureToGroup: (projectId, groupId, payload) =>
+    request(`/projects/${projectId}/feature-groups/${groupId}/features`, {
       method: "POST",
-      body: JSON.stringify(body),
+      body: JSON.stringify(payload),
     }),
-
-  addFeaturesToGroup: (projectId, groupId, featureIds) =>
-    request(`${featureGroupPath(projectId, groupId)}/features`, {
-      method: "POST",
-      body: JSON.stringify({
-        feature_ids: featureIds,
-      }),
-    }),
-
-  removeFeatureFromGroup: (projectId, groupId, featureId) =>
-    request(
-      `${featureGroupPath(projectId, groupId)}/features/${encodeURIComponent(
-        featureId
-      )}`,
-      {
-        method: "DELETE",
-      }
-    ),
 
   ungroupFeature: (projectId, groupId, featureId) =>
     request(
-      `${featureGroupPath(projectId, groupId)}/features/${encodeURIComponent(
-        featureId
-      )}`,
-      {
-        method: "DELETE",
-      }
+      `/projects/${projectId}/feature-groups/${groupId}/features/${featureId}`,
+      { method: "DELETE" }
     ),
 
-  // PRIORITIZATION
+  // // Dependencies
+  getDependencies: (projectId, signal) =>
+    request(`/projects/${projectId}/dependencies`, { signal }),
 
-  submitResponse: (projectId, body) =>
-    request(`${projectPath(projectId)}/responses`, {
+  createDependency: (projectId, payload) =>
+    request(`/projects/${projectId}/dependencies`, {
       method: "POST",
-      body: JSON.stringify(body),
+      body: JSON.stringify(payload),
     }),
 
-  // RESULTS
+  deleteDependency: (projectId, dependencyId) =>
+    request(`/projects/${projectId}/dependencies/${dependencyId}`, {
+      method: "DELETE",
+    }),
 
+  // Prioritization
+  submitResponse: (projectId, payload) =>
+    request(`/projects/${projectId}/responses`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  // Results
   getResults: (projectId, signal) =>
-    request(`${projectPath(projectId)}/results`, {
-      signal,
-    }),
+    request(`/projects/${projectId}/results`, { signal }),
 };

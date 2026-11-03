@@ -415,6 +415,31 @@ export default function Results() {
                                 </AccordionDetails>
                               </Accordion>
                             )}
+
+                            {item.dependencies?.length > 0 && (
+                              <Box sx={{ mt: 1, ml: 0.5, pl: 1.5, py: 0.75, borderLeft: "3px solid", borderColor: "warning.main", bgcolor: "action.hover", borderRadius: 1 }}>
+                                <Typography variant="caption" fontWeight={750} color="warning.main" sx={{ display: "block", mb: 0.75 }}>
+                                  DEPENDENT ITEMS · UNLOCKED AFTER THIS IS IMPLEMENTED
+                                </Typography>
+                                <Stack spacing={0.75}>
+                                  {item.dependencies.map((child) => (
+                                    <Box key={`${child.type}:${child.id}`}>
+                                      <Stack direction="row" spacing={1} sx={{ alignItems: "center", justifyContent: "space-between" }}>
+                                        <Typography variant="body2" fontWeight={650}>{child.name}</Typography>
+                                        <Chip size="small" variant="outlined" label={STATUS_LABELS[child.status] || child.status || "Pending"} />
+                                      </Stack>
+                                      {child.features?.length > 0 && (
+                                        <Stack spacing={0.35} sx={{ ml: 1.5, mt: 0.5, pl: 1, borderLeft: "1px solid", borderColor: "divider" }}>
+                                          {child.features.map((member) => (
+                                            <Typography key={member.id} variant="caption" color="text.secondary">• {member.name}</Typography>
+                                          ))}
+                                        </Stack>
+                                      )}
+                                    </Box>
+                                  ))}
+                                </Stack>
+                              </Box>
+                            )}
                           </Box>
                         </Stack>
                       </Box>

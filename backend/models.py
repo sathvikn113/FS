@@ -3,7 +3,7 @@ from typing import Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -49,6 +49,29 @@ class FeatureGroup(Base):
 
     project = relationship("Project", back_populates="feature_groups")
     features = relationship("Feature", back_populates="feature_group")
+
+
+class FeatureDependency(Base):
+    __tablename__ = "feature_dependencies"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "parent_type", "parent_id", "child_type", "child_id",
+            name="uq_feature_dependency_edge",
+        ),
+        CheckConstraint("parent_type IN ('feature', 'group')", name="ck_dependency_parent_type"),
+        CheckConstraint("child_type IN ('feature', 'group')", name="ck_dependency_child_type"),
+    )
+
+    id = Column(String, primary_key=True)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    parent_type = Column(String(20), nullable=False)
+    parent_id = Column(String, nullable=False)
+    child_type = Column(String(20), nullable=False)
+    child_id = Column(String, nullable=False)
+    created_by = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    project = relationship("Project")
 
 
 class Feature(Base):
@@ -186,3 +209,10 @@ class ProjectIn(BaseModel):
     @classmethod
     def validate_name(cls, value: str) -> str:
         return _required_trimmed_name(value)
+
+
+class FeatureDependencyIn(BaseModel):
+    parent_type: Literal["feature", "group"]
+    parent_id: str = Field(min_length=1)
+    child_type: Literal["feature", "group"]
+    child_id: str = Field(min_length=1)

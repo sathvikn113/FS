@@ -20,6 +20,8 @@ from models import (
     FeatureGroup,
     FeatureGroupIn,
     FeatureGroupUpdate,
+    FeatureDependency,
+    FeatureDependencyIn,
     FeatureIn,
     FeatureUpdate,
     Project,
@@ -38,16 +40,10 @@ class ProjectSupportEmailIn(BaseModel):
     support_email: str | None = None
 
 
-# ==================================================
-# DATABASE
-# ==================================================
 
 Base.metadata.create_all(bind=engine)
 
 
-# ==================================================
-# AUTHENTICATION CONFIGURATION
-# ==================================================
 
 OAUTH2_PROXY_AUTH_URL = os.getenv(
     "OAUTH2_PROXY_AUTH_URL",
@@ -75,9 +71,7 @@ _jwks_client = PyJWKClient(
 )
 
 
-# ==================================================
-# FASTAPI APPLICATION
-# ==================================================
+
 
 app = FastAPI(title="Feature Prioritizer API")
 
@@ -85,6 +79,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -92,9 +89,6 @@ app.add_middleware(
 )
 
 
-# ==================================================
-# AUTHENTICATION
-# ==================================================
 
 def get_current_user(request: Request) -> dict:
 
@@ -106,7 +100,7 @@ def get_current_user(request: Request) -> dict:
             detail="Sign in required",
         )
 
-    # Validate session using OAuth2 Proxy.
+
     try:
         auth_response = httpx.get(
             OAUTH2_PROXY_AUTH_URL,
@@ -142,7 +136,7 @@ def get_current_user(request: Request) -> dict:
             ),
         )
 
-    # Validate Keycloak JWT.
+    
     try:
         signing_key = (
             _jwks_client
@@ -166,7 +160,7 @@ def get_current_user(request: Request) -> dict:
             detail="Invalid or expired Keycloak access token",
         ) from exc
 
-    # Validate client.
+
     authorized_party = claims.get("azp")
 
     if authorized_party != KEYCLOAK_CLIENT_ID:
@@ -175,10 +169,7 @@ def get_current_user(request: Request) -> dict:
             detail="Unexpected Keycloak client",
         )
 
-    # ----------------------------------------------
-    # CLIENT ROLES
-    # ----------------------------------------------
-
+ 
     resource_access = claims.get("resource_access") or {}
 
     application_access = (
@@ -203,9 +194,7 @@ def get_current_user(request: Request) -> dict:
             detail="No valid Features_Selector role assigned",
         )
 
-    # ----------------------------------------------
-    # KEYCLOAK GROUPS
-    # ----------------------------------------------
+
 
     groups = claims.get("groups") or []
 
@@ -232,9 +221,6 @@ def get_current_user(request: Request) -> dict:
     }
 
 
-# ==================================================
-# MAIN ADMIN AUTHORIZATION
-# ==================================================
 
 def require_main_admin(
     user: dict = Depends(get_current_user),
@@ -249,9 +235,6 @@ def require_main_admin(
     return user
 
 
-# ==================================================
-# PROJECT AUTHORIZATION
-# ==================================================
 
 def can_manage_project(
     user: dict,
@@ -310,9 +293,7 @@ def require_project_admin(
     return user
 
 
-# ==================================================
-# HELPERS
-# ==================================================
+
 
 def clean_optional_text(value: str | None) -> str | None:
 
@@ -342,10 +323,6 @@ def get_project_or_404(
     return project
 
 
-# ==================================================
-# CURRENT USER
-# ==================================================
-
 @app.get("/api/auth/me")
 def get_authenticated_user(
     user: dict = Depends(get_current_user),
@@ -353,11 +330,6 @@ def get_authenticated_user(
     return user
 
 
-# ==================================================
-# PROJECT ENDPOINTS
-# ==================================================
-
-# Public project listing.
 @app.get("/api/projects")
 def list_projects(
     db: Session = Depends(get_db),
@@ -370,7 +342,7 @@ def list_projects(
     )
 
 
-# Only main_admin can create projects.
+
 @app.post("/api/projects", status_code=201)
 def create_project(
     body: ProjectIn,
@@ -391,7 +363,7 @@ def create_project(
     return project
 
 
-# Public project details.
+
 @app.get("/api/projects/{project_id}")
 def get_project_detail(
     project_id: str,
@@ -401,8 +373,6 @@ def get_project_detail(
     return get_project_or_404(db, project_id)
 
 
-# Main admin or the app admin assigned to this project can manage its support email.
-# Normal users can read the email through the regular project listing/detail endpoints.
 @app.patch("/api/projects/{project_id}/support-email")
 def update_project_support_email(
     project_id: str,
@@ -412,7 +382,6 @@ def update_project_support_email(
 ):
     project = get_project_or_404(db, project_id)
 
-    # This field must also be added to the Project model in models.py.
     if not hasattr(project, "support_email"):
         raise HTTPException(
             status_code=500,
@@ -443,7 +412,7 @@ def update_project_support_email(
     }
 
 
-# Only main_admin can delete projects.
+
 @app.delete("/api/projects/{project_id}")
 def delete_project(
     project_id: str,
@@ -459,9 +428,7 @@ def delete_project(
     return {"ok": True}
 
 
-# ==================================================
-# PROJECT PERMISSIONS
-# ==================================================
+
 
 @app.get("/api/projects/{project_id}/permissions")
 def get_project_permissions(
@@ -482,6 +449,151 @@ def get_project_permissions(
         "can_submit_response": True,
         "can_view_results": True,
     }
+
+
+# ==================================================
+# DEPENDENCY ENDPOINTS
+# ==================================================
+
+def _dependency_entity(db: Session, project_id: str, entity_type: str, entity_id: str):
+    if entity_type == "feature":
+        entity = db.query(Feature).filter(
+            Feature.id == entity_id, Feature.project_id == project_id
+        ).first()
+    elif entity_type == "group":
+        entity = db.query(FeatureGroup).filter(
+            FeatureGroup.id == entity_id, FeatureGroup.project_id == project_id
+        ).first()
+    else:
+        entity = None
+    if not entity:
+        raise HTTPException(status_code=404, detail=f"{entity_type.title()} not found in this project")
+    return entity
+
+
+def _entity_status(entity_type: str, entity) -> str:
+    return entity.status
+
+
+@app.get("/api/projects/{project_id}/dependencies")
+def list_dependencies(project_id: str, db: Session = Depends(get_db)):
+    get_project_or_404(db, project_id)
+    rows = db.query(FeatureDependency).filter(
+        FeatureDependency.project_id == project_id
+    ).order_by(FeatureDependency.created_at, FeatureDependency.id).all()
+    result = []
+    for row in rows:
+        try:
+            parent = _dependency_entity(db, project_id, row.parent_type, row.parent_id)
+            child = _dependency_entity(db, project_id, row.child_type, row.child_id)
+        except HTTPException:
+            continue
+        result.append({
+            "id": row.id, "project_id": project_id,
+            "parent_type": row.parent_type, "parent_id": row.parent_id,
+            "parent_name": parent.name, "child_type": row.child_type,
+            "child_id": row.child_id, "child_name": child.name,
+        })
+    return result
+
+
+@app.post("/api/projects/{project_id}/dependencies", status_code=201)
+def create_dependency(
+    project_id: str,
+    body: FeatureDependencyIn,
+    admin: dict = Depends(require_project_admin),
+    db: Session = Depends(get_db),
+):
+    get_project_or_404(db, project_id)
+    if body.parent_type == body.child_type and body.parent_id == body.child_id:
+        raise HTTPException(status_code=400, detail="An item cannot depend on itself")
+    parent = _dependency_entity(db, project_id, body.parent_type, body.parent_id)
+    child = _dependency_entity(db, project_id, body.child_type, body.child_id)
+
+
+    if body.parent_type == "feature" and parent.group_id is not None:
+        raise HTTPException(status_code=400, detail="A feature inside a group must use its group as the dependency item")
+    if body.child_type == "feature" and child.group_id is not None:
+        raise HTTPException(status_code=400, detail="A feature inside a group must use its group as the dependency item")
+
+    if parent.status in {"implemented", "rejected"}:
+        raise HTTPException(status_code=400, detail="A completed item cannot be a dependency parent")
+    if child.status in {"implemented", "rejected"}:
+        raise HTTPException(status_code=400, detail="A completed item cannot be a dependent child")
+
+
+    edges = db.query(FeatureDependency).filter(FeatureDependency.project_id == project_id).all()
+    graph = {}
+    for edge in edges:
+        graph.setdefault((edge.parent_type, edge.parent_id), set()).add((edge.child_type, edge.child_id))
+    start = (body.child_type, body.child_id)
+    target = (body.parent_type, body.parent_id)
+    stack, visited = [start], set()
+    while stack:
+        node = stack.pop()
+        if node == target:
+            raise HTTPException(status_code=400, detail="This dependency would create a circular dependency")
+        if node not in visited:
+            visited.add(node)
+            stack.extend(graph.get(node, ()))
+
+    if body.parent_type == "group" and body.child_type == "feature" and child.group_id == parent.id:
+        raise HTTPException(status_code=400, detail="A group cannot depend on one of its own member features")
+    if body.parent_type == "feature" and body.child_type == "group" and any(member.id == parent.id for member in child.features):
+        raise HTTPException(status_code=400, detail="A feature cannot depend on a group that already contains it")
+
+    duplicate = db.query(FeatureDependency).filter_by(
+        project_id=project_id, parent_type=body.parent_type,
+        parent_id=body.parent_id, child_type=body.child_type,
+        child_id=body.child_id,
+    ).first()
+    if duplicate:
+        raise HTTPException(status_code=409, detail="This dependency already exists")
+    existing_parent = db.query(FeatureDependency).filter_by(
+        project_id=project_id, child_type=body.child_type, child_id=body.child_id
+    ).first()
+    if existing_parent:
+        raise HTTPException(status_code=409, detail="This item is already dependent on another parent")
+    row = FeatureDependency(
+        id=new_id(), project_id=project_id,
+        parent_type=body.parent_type, parent_id=body.parent_id,
+        child_type=body.child_type, child_id=body.child_id,
+        created_by=admin.get("id"),
+    )
+    db.add(row)
+    db.commit()
+    return {
+        "id": row.id, "project_id": project_id,
+        "parent_type": row.parent_type, "parent_id": row.parent_id,
+        "parent_name": parent.name, "child_type": row.child_type,
+        "child_id": row.child_id, "child_name": child.name,
+    }
+
+
+@app.delete("/api/projects/{project_id}/dependencies/{dependency_id}")
+def delete_dependency(
+    project_id: str,
+    dependency_id: str,
+    admin: dict = Depends(require_project_admin),
+    db: Session = Depends(get_db),
+):
+    row = db.query(FeatureDependency).filter(
+        FeatureDependency.id == dependency_id,
+        FeatureDependency.project_id == project_id,
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Dependency not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+def _remove_parent_dependencies(db: Session, project_id: str, entity_type: str, entity_id: str):
+    db.query(FeatureDependency).filter(
+        FeatureDependency.project_id == project_id,
+        FeatureDependency.parent_type == entity_type,
+        FeatureDependency.parent_id == entity_id,
+    ).delete(synchronize_session=False)
 
 
 # ==================================================
@@ -664,6 +776,21 @@ def rename_feature_group(
         group.status = body.status
         if body.status == "in_progress" and group.implementation_started_at is None:
             group.implementation_started_at = datetime.now(timezone.utc)
+
+        if body.status in {"implemented", "rejected"}:
+
+            _remove_parent_dependencies(db, project_id, "group", group_id)
+            db.query(FeatureDependency).filter(
+                FeatureDependency.project_id == project_id,
+                FeatureDependency.child_type == "group",
+                FeatureDependency.child_id == group_id,
+            ).delete(synchronize_session=False)
+
+         
+            if body.status == "implemented" and group.kind == "depends":
+                for member_feature in list(group.features):
+                    member_feature.group_id = None
+
     db.commit()
     db.refresh(group)
     return {
@@ -704,12 +831,15 @@ def delete_feature_group(
     if not group:
         raise HTTPException(status_code=404, detail="Feature group not found")
     try:
-        # Keep member features; make them standalone again. Historical group votes remain attached to the group
-        # until deletion; to avoid losing historical scores, retain the group as an archived result target.
-        # This endpoint therefore refuses deletion after group votes exist.
+       
         group_votes = db.query(Allocation).filter(Allocation.group_id == group_id).count()
         if group_votes:
             raise HTTPException(status_code=409, detail="This group has voting history. Ungroup its features only after deciding how to preserve those votes.")
+        db.query(FeatureDependency).filter(
+            FeatureDependency.project_id == project_id,
+            ((FeatureDependency.parent_type == "group") & (FeatureDependency.parent_id == group_id)) |
+            ((FeatureDependency.child_type == "group") & (FeatureDependency.child_id == group_id)),
+        ).delete(synchronize_session=False)
         for feature in group.features:
             feature.group_id = None
         db.delete(group)
@@ -720,162 +850,8 @@ def delete_feature_group(
         raise
 
 
-# ==================================================
-# FEATURE GROUP ENDPOINTS
-# ==================================================
-
-@app.get("/api/projects/{project_id}/feature-groups")
-def list_feature_groups(project_id: str, db: Session = Depends(get_db)):
-    get_project_or_404(db, project_id)
-    groups = db.query(FeatureGroup).filter(FeatureGroup.project_id == project_id).order_by(FeatureGroup.created_at, FeatureGroup.id).all()
-    return [
-        {
-            "id": group.id,
-            "project_id": group.project_id,
-            "name": group.name,
-            "description": group.description,
-            "status": group.status,
-            "kind": group.kind,
-            "implementation_started_at": group.implementation_started_at,
-            "created_at": group.created_at,
-            "features": [
-                {"id": feature.id, "name": feature.name, "description": feature.description, "status": feature.status}
-                for feature in sorted(group.features, key=lambda item: (item.created_at, item.id))
-            ],
-        }
-        for group in groups
-    ]
 
 
-@app.post("/api/projects/{project_id}/feature-groups", status_code=201)
-def create_feature_group(
-    project_id: str,
-    body: FeatureGroupIn,
-    admin: dict = Depends(require_project_admin),
-    db: Session = Depends(get_db),
-):
-    get_project_or_404(db, project_id)
-    selected = db.query(Feature).filter(
-        Feature.project_id == project_id,
-        Feature.id.in_(body.feature_ids),
-    ).all()
-    if len(selected) != len(body.feature_ids):
-        raise HTTPException(status_code=400, detail="Every selected feature must belong to this project")
-    if any(feature.group_id is not None for feature in selected):
-        raise HTTPException(status_code=400, detail="A selected feature already belongs to a group")
-    if any(feature.status in {"implemented", "rejected"} for feature in selected):
-        raise HTTPException(status_code=400, detail="Implemented or rejected features cannot be grouped")
-
-    group = FeatureGroup(
-        id=new_id(),
-        project_id=project_id,
-        name=body.name,
-        description=clean_optional_text(body.description),
-        status="pending",
-        kind=body.kind,
-        created_by=admin.get("id"),
-    )
-    try:
-        db.add(group)
-        db.flush()
-        for feature in selected:
-            feature.group_id = group.id
-        db.commit()
-        db.refresh(group)
-    except Exception:
-        db.rollback()
-        raise
-    return {
-        "id": group.id,
-        "project_id": group.project_id,
-        "name": group.name,
-        "description": group.description,
-        "status": group.status,
-        "kind": group.kind,
-        "implementation_started_at": group.implementation_started_at,
-        "created_at": group.created_at,
-        "features": [{"id": f.id, "name": f.name, "description": f.description, "status": f.status, "implementation_started_at": f.implementation_started_at} for f in selected],
-    }
-
-
-@app.patch("/api/projects/{project_id}/feature-groups/{group_id}")
-def rename_feature_group(
-    project_id: str,
-    group_id: str,
-    body: FeatureGroupUpdate,
-    admin: dict = Depends(require_project_admin),
-    db: Session = Depends(get_db),
-):
-    group = db.query(FeatureGroup).filter(FeatureGroup.id == group_id, FeatureGroup.project_id == project_id).first()
-    if not group:
-        raise HTTPException(status_code=404, detail="Feature group not found")
-    if body.name is not None:
-        group.name = body.name
-    if body.status is not None:
-        group.status = body.status
-        if body.status == "in_progress" and group.implementation_started_at is None:
-            group.implementation_started_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(group)
-    return {
-        "id": group.id,
-        "project_id": group.project_id,
-        "name": group.name,
-        "description": group.description,
-        "status": group.status,
-        "kind": group.kind,
-        "implementation_started_at": group.implementation_started_at,
-    }
-
-
-@app.delete("/api/projects/{project_id}/feature-groups/{group_id}/features/{feature_id}")
-def ungroup_feature(
-    project_id: str,
-    group_id: str,
-    feature_id: str,
-    admin: dict = Depends(require_project_admin),
-    db: Session = Depends(get_db),
-):
-    feature = db.query(Feature).filter(Feature.id == feature_id, Feature.project_id == project_id, Feature.group_id == group_id).first()
-    if not feature:
-        raise HTTPException(status_code=404, detail="Feature not found in this group")
-    feature.group_id = None
-    db.commit()
-    return {"ok": True}
-
-
-@app.delete("/api/projects/{project_id}/feature-groups/{group_id}")
-def delete_feature_group(
-    project_id: str,
-    group_id: str,
-    admin: dict = Depends(require_project_admin),
-    db: Session = Depends(get_db),
-):
-    group = db.query(FeatureGroup).filter(FeatureGroup.id == group_id, FeatureGroup.project_id == project_id).first()
-    if not group:
-        raise HTTPException(status_code=404, detail="Feature group not found")
-    try:
-        # Keep member features; make them standalone again. Historical group votes remain attached to the group
-        # until deletion; to avoid losing historical scores, retain the group as an archived result target.
-        # This endpoint therefore refuses deletion after group votes exist.
-        group_votes = db.query(Allocation).filter(Allocation.group_id == group_id).count()
-        if group_votes:
-            raise HTTPException(status_code=409, detail="This group has voting history. Ungroup its features only after deciding how to preserve those votes.")
-        for feature in group.features:
-            feature.group_id = None
-        db.delete(group)
-        db.commit()
-        return {"ok": True}
-    except Exception:
-        db.rollback()
-        raise
-
-
-# ==================================================
-# FEATURE ENDPOINTS
-# ==================================================
-
-# Public feature listing.
 @app.get("/api/projects/{project_id}/features")
 def list_features(
     project_id: str,
@@ -921,7 +897,7 @@ def add_feature(
     return feature
 
 
-# main_admin or assigned app_admin.
+
 @app.patch(
     "/api/projects/{project_id}/features/{feature_id}"
 )
@@ -976,6 +952,14 @@ def update_feature(
             timezone.utc
         )
 
+    if changes.get("status") in {"implemented", "rejected"}:
+        _remove_parent_dependencies(db, project_id, "feature", feature_id)
+        db.query(FeatureDependency).filter(
+            FeatureDependency.project_id == project_id,
+            FeatureDependency.child_type == "feature",
+            FeatureDependency.child_id == feature_id,
+        ).delete(synchronize_session=False)
+
     for field, value in changes.items():
 
         if field == "description":
@@ -1018,6 +1002,13 @@ def delete_feature(
             Allocation.feature_id == feature_id
         ).delete(synchronize_session=False)
 
+        # Remove dependency edges that reference this feature.
+        db.query(FeatureDependency).filter(
+            FeatureDependency.project_id == project_id,
+            ((FeatureDependency.parent_type == "feature") & (FeatureDependency.parent_id == feature_id)) |
+            ((FeatureDependency.child_type == "feature") & (FeatureDependency.child_id == feature_id)),
+        ).delete(synchronize_session=False)
+
         # Delete the feature itself.
         db.delete(feature)
         db.commit()
@@ -1028,9 +1019,6 @@ def delete_feature(
         db.rollback()
         raise
 
-# ==================================================
-# PRIORITIZATION
-# ==================================================
 
 @app.post(
     "/api/projects/{project_id}/responses",
@@ -1044,7 +1032,7 @@ def submit_response(
 ):
     project = get_project_or_404(db, project_id)
     groups = db.query(FeatureGroup).filter(FeatureGroup.project_id == project_id).all()
-    validate_response(body, project.features, groups)
+    validate_response(body, project.features, groups, db, project_id)
 
     response = Response(
         id=new_id(),
@@ -1064,10 +1052,14 @@ def submit_response(
     return {"ok": True}
 
 
-def validate_response(body: ResponseIn, features: list[Feature], groups: list[FeatureGroup]) -> None:
+def validate_response(body: ResponseIn, features: list[Feature], groups: list[FeatureGroup], db: Session, project_id: str) -> None:
+    # A dependency child is displayed below its parent and cannot receive its own allocation.
+    dependency_rows = db.query(FeatureDependency).filter(FeatureDependency.project_id == project_id).all()
+    child_keys = {(row.child_type, row.child_id) for row in dependency_rows}
     active_features = [feature for feature in features if feature.status not in {"implemented", "rejected"}]
     active_groups = [group for group in groups if group.status not in {"implemented", "rejected"} and any(f.status not in {"implemented", "rejected"} for f in group.features)]
-    active_ungrouped = [feature for feature in active_features if feature.group_id is None]
+    active_ungrouped = [feature for feature in active_features if feature.group_id is None and ("feature", feature.id) not in child_keys]
+    active_groups = [group for group in active_groups if ("group", group.id) not in child_keys]
     item_count = len(active_ungrouped) + len(active_groups)
     if item_count < 2:
         raise HTTPException(status_code=400, detail="Add at least 2 active prioritization items before submitting.")
@@ -1094,26 +1086,25 @@ def validate_response(body: ResponseIn, features: list[Feature], groups: list[Fe
         seen.add(key)
 
 
-# ==================================================
-# RESULTS
-# ==================================================
+
 
 @app.get("/api/projects/{project_id}/results")
 def get_results(project_id: str, db: Session = Depends(get_db)):
     project = get_project_or_404(db, project_id)
     all_groups = db.query(FeatureGroup).filter(FeatureGroup.project_id == project_id).all()
-    # Only groups that still contain features are current ranking items.
-    # Keep empty group rows and their historical allocations in the database,
-    # but don't display them as active ranking entries after ungrouping.
+  
     groups = [group for group in all_groups if group.features]
+    dependency_rows = db.query(FeatureDependency).filter(FeatureDependency.project_id == project_id).all()
+    dependency_child_keys = {(row.child_type, row.child_id) for row in dependency_rows}
     feature_by_id = {feature.id: feature for feature in project.features}
 
-    # Scores are accumulated per response item. Historical votes for member features
-    # are attributed to the current group; future votes point directly to group_id.
-    totals = {f"group:{group.id}": 0 for group in groups}
-    contributors = {f"group:{group.id}": 0 for group in groups}
+    totals = {
+        f"group:{group.id}": 0 for group in groups
+        if ("group", group.id) not in dependency_child_keys
+    }
+    contributors = {key: 0 for key in totals}
     for feature in project.features:
-        if feature.group_id is None:
+        if feature.group_id is None and ("feature", feature.id) not in dependency_child_keys:
             totals[f"feature:{feature.id}"] = 0
             contributors[f"feature:{feature.id}"] = 0
 
@@ -1127,8 +1118,7 @@ def get_results(project_id: str, db: Session = Depends(get_db)):
                 if not feature:
                     continue
                 key = f"group:{feature.group_id}" if feature.group_id else f"feature:{feature.id}"
-            # Ignore allocations for groups that are now empty. Their historical
-            # records remain stored, but should not affect the visible ranking/share.
+   
             if key in totals:
                 total_points += allocation.percentage
                 totals[key] += allocation.percentage
@@ -1137,8 +1127,10 @@ def get_results(project_id: str, db: Session = Depends(get_db)):
 
     items = []
     for group in groups:
+        if ("group", group.id) in dependency_child_keys:
+            continue
         member_features = [f for f in group.features]
-        # Groups containing only implemented features are still shown in historical results.
+
         items.append({
             "key": f"group:{group.id}",
             "groupId": group.id,
@@ -1149,7 +1141,7 @@ def get_results(project_id: str, db: Session = Depends(get_db)):
             "features": [{"id": f.id, "name": f.name, "status": f.status, "implementationStartedAt": f.implementation_started_at} for f in member_features],
         })
     for feature in project.features:
-        if feature.group_id is None:
+        if feature.group_id is None and ("feature", feature.id) not in dependency_child_keys:
             items.append({
                 "key": f"feature:{feature.id}",
                 "groupId": None,
@@ -1160,6 +1152,20 @@ def get_results(project_id: str, db: Session = Depends(get_db)):
                 "implementationStartedAt": feature.implementation_started_at,
                 "features": [],
             })
+
+    item_lookup = {("group" if item["groupId"] else "feature", item["groupId"] or item["featureId"]): item for item in items}
+    for edge in dependency_rows:
+        parent_item = item_lookup.get((edge.parent_type, edge.parent_id))
+        if not parent_item:
+            continue
+        child = _dependency_entity(db, project_id, edge.child_type, edge.child_id)
+        parent_item.setdefault("dependencies", []).append({
+            "id": edge.child_id,
+            "dependencyId": edge.id,
+            "type": edge.child_type,
+            "name": child.name, "status": child.status,
+            "features": ([{"id": f.id, "name": f.name, "status": f.status} for f in child.features] if edge.child_type == "group" else []),
+        })
 
     ranked = sorted(items, key=lambda item: (-totals.get(item["key"], 0), item["name"].casefold()))
     results = []
@@ -1174,6 +1180,7 @@ def get_results(project_id: str, db: Session = Depends(get_db)):
             "status": item["status"],
             "implementationStartedAt": item.get("implementationStartedAt"),
             "features": item["features"],
+            "dependencies": item.get("dependencies", []),
             "share": round(share, 1),
             "priority": round(share, 1),
             "totalScore": score,
