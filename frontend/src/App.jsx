@@ -70,14 +70,14 @@ function Shell({ mode, toggle, children }) {
           {loading ? null : user ? (
             <>
               <Typography variant="body2" color="text.secondary" sx={{ mr: 1, display: { xs: "none", sm: "block" } }}>
-                {user.username || user.email} · {user.is_admin ? "Admin" : "User"}
+                {user.id || user.email} · {user.is_admin ? "Admin" : "User"}
               </Typography>
-              <Button component="a" href="http://localhost:4180/oauth2/sign_out?rd=http://localhost:5173" size="medium" variant="outlined" sx={{ minHeight: 40, mr: 1, whiteSpace: "nowrap" }}>
+              <Button component="a" href="/oauth2/sign_out?rd=%2F" size="medium" variant="outlined" sx={{ minHeight: 40, mr: 1, whiteSpace: "nowrap" }}>
                 Sign out
               </Button>
             </>
           ) : (
-            <Button component="a" href="http://localhost:4180/oauth2/start?rd=http://localhost:5173" size="medium" variant="contained" sx={{ minHeight: 40, mr: 1, whiteSpace: "nowrap" }}>
+            <Button component="a" href="/oauth2/start?rd=%2F" size="medium" variant="contained" sx={{ minHeight: 40, mr: 1, whiteSpace: "nowrap" }}>
               Sign in
             </Button>
           )}

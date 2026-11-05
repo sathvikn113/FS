@@ -30,11 +30,12 @@ import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import { useNavigate } from "react-router-dom";
 
 import { api } from "../api";
+import { useAuth } from "../AuthContext.jsx";
 
 export default function Home() {
   const [projects, setProjects] = useState([]);
   const [projectSearch, setProjectSearch] = useState("");
-  const [currentUser, setCurrentUser] = useState(null);
+  const { user: currentUser } = useAuth();
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -59,11 +60,6 @@ export default function Home() {
   // Only main_admin can create or delete projects.
   const userRoles = currentUser?.roles || [];
   const isMainAdmin = userRoles.includes("main_admin");
-  // Main admins and app/project admins may manage a project's support contact.
-  const canManageSupportEmail = userRoles.some((role) =>
-    ["main_admin", "app_admin", "project_admin"].includes(role)
-  );
-
   const normalizedProjectSearch = projectSearch.trim().toLowerCase();
   const filteredProjects = projects.filter((project) => {
     if (!normalizedProjectSearch) return true;
@@ -103,31 +99,21 @@ export default function Home() {
       }
     }
 
-    async function loadCurrentUser() {
-      try {
-        const user = await api.getCurrentUser();
-
-        if (!cancelled) {
-          setCurrentUser(user);
-        }
-      } catch {
-        if (!cancelled) {
-          setCurrentUser(null);
-        }
-      }
-    }
-
     loadProjects();
-    loadCurrentUser();
 
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // Load project ranking summaries and per-project permissions.
+  // Load public ranking summaries and, only when signed in, project-scoped permissions.
   useEffect(() => {
-    if (!projects.length) return;
+    if (!projects.length) {
+      setProjectResults({});
+      setProjectPermissions({});
+      return;
+    }
+
     let cancelled = false;
 
     async function loadProjectExtras() {
@@ -149,16 +135,19 @@ export default function Home() {
         })
       );
 
-      const permissionEntries = await Promise.all(
-        projects.map(async (project) => {
-          try {
-            const permissions = await api.getProjectPermissions(project.id);
-            return [project.id, permissions];
-          } catch {
-            return [project.id, null];
-          }
-        })
-      );
+      let permissionEntries = [];
+      if (currentUser) {
+        permissionEntries = await Promise.all(
+          projects.map(async (project) => {
+            try {
+              const permissions = await api.getProjectPermissions(project.id);
+              return [project.id, permissions];
+            } catch {
+              return [project.id, null];
+            }
+          })
+        );
+      }
 
       if (!cancelled) {
         setProjectResults(Object.fromEntries(resultEntries));
@@ -168,7 +157,7 @@ export default function Home() {
 
     loadProjectExtras();
     return () => { cancelled = true; };
-  }, [projects]);
+  }, [projects, currentUser]);
 
   const handleCopySupportEmail = async (email, event, projectId = null) => {
     event?.stopPropagation();
@@ -607,6 +596,9 @@ export default function Home() {
             const supportEmail = project.support_email || project.supportEmail || "";
             const highest = projectResults[project.id];
             const copied = copiedSupportProject === project.id || copiedSupportProject === supportEmail;
+            const canManageSupportEmail = Boolean(
+              currentUser?.is_admin || projectPermissions[project.id]?.can_manage_features
+            );
 
             return (
               <Card
