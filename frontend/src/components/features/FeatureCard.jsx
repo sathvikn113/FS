@@ -238,7 +238,7 @@ export default function FeatureCard({
                 </IconButton>
               </Tooltip>
 
-              <Tooltip title={`Delete ${feature.name}`}>
+              {!feature.isGroup && <Tooltip title={`Delete ${feature.name}`}>
                 <IconButton
                   aria-label={`Delete ${feature.name}`}
                   color="error"
@@ -248,7 +248,7 @@ export default function FeatureCard({
                 >
                   <DeleteOutlineRoundedIcon />
                 </IconButton>
-              </Tooltip>
+              </Tooltip>}
             </Stack>
           )}
         </Stack>

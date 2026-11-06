@@ -113,8 +113,8 @@ def get_current_user(request: Request) -> dict:
 )
 
     return {
-        "id": username,
-        "username": subject,
+        "id": subject,
+        "username": username or (email.split("@")[0] if email else subject),
         "email": email,
         "roles": sorted(roles),
         "groups": project_groups,
@@ -167,7 +167,22 @@ def require_project_admin(
             status_code=404,
             detail="Project not found",
         )
-    if not can_manage_project(user, project):
+    allowed = can_manage_project(user, project)
+    print(
+        "RBAC PROJECT CHECK:",
+        {
+            "project_id": project_id,
+            "project_name": project.name,
+            "user_id": user.get("id"),
+            "roles": user.get("roles"),
+            "groups": user.get("groups"),
+            "required_group": f"/{project.name}/app_admin",
+            "is_admin": user.get("is_admin"),
+            "is_app_admin": user.get("is_app_admin"),
+            "allowed": allowed,
+        },
+    )
+    if not allowed:
         raise HTTPException(
             status_code=403,
             detail=(
@@ -692,6 +707,16 @@ def add_feature(
     db: Session = Depends(get_db),
 ):
     get_project_or_404(db, project_id)
+    print(
+        "ADD FEATURE AUTH:",
+        {
+            "project_id": project_id,
+            "user_id": user.get("id"),
+            "username": user.get("username"),
+            "roles": user.get("roles"),
+            "groups": user.get("groups"),
+        },
+    )
     feature = Feature(
         id=new_id(),
         project_id=project_id,
@@ -875,16 +900,15 @@ def get_results(project_id: str, db: Session = Depends(get_db)):
     dependency_child_keys = {(row.child_type, row.child_id) for row in dependency_rows}
     feature_by_id = {feature.id: feature for feature in project.features}
 
-    totals = {
-        f"group:{group.id}": 0 for group in groups
-        if ("group", group.id) not in dependency_child_keys
-    }
+    # Keep historical allocations for every feature/group, including dependency children.
+    # Grouping retains the existing rule: member allocations belong to their group.
+    totals = {f"group:{group.id}": 0 for group in groups}
     contributors = {key: 0 for key in totals}
     for feature in project.features:
-        if feature.group_id is None and ("feature", feature.id) not in dependency_child_keys:
+        if feature.group_id is None:
             totals[f"feature:{feature.id}"] = 0
             contributors[f"feature:{feature.id}"] = 0
-    total_points = 0
+
     for response in project.responses:
         for allocation in response.allocations:
             if allocation.group_id:
@@ -894,13 +918,31 @@ def get_results(project_id: str, db: Session = Depends(get_db)):
                 if not feature:
                     continue
                 key = f"group:{feature.group_id}" if feature.group_id else f"feature:{feature.id}"
-            # Ignore allocations for groups that are now empty. Their historical
-            # records remain stored, but should not affect the visible ranking/share.
             if key in totals:
-                total_points += allocation.percentage
                 totals[key] += allocation.percentage
                 if allocation.percentage > 0:
                     contributors[key] += 1
+
+    children_by_parent = {}
+    for edge in dependency_rows:
+        parent_key = f"{edge.parent_type}:{edge.parent_id}"
+        child_key = f"{edge.child_type}:{edge.child_id}"
+        children_by_parent.setdefault(parent_key, set()).add(child_key)
+
+    def combined_score(key, visited=None):
+        visited = set() if visited is None else visited
+        if key in visited:
+            return 0, 0
+        visited.add(key)
+        score = totals.get(key, 0)
+        count = contributors.get(key, 0)
+        for child_key in children_by_parent.get(key, ()):
+            child_score, child_count = combined_score(child_key, visited)
+            score += child_score
+            count += child_count
+        return score, count
+
+
     items = []
     for group in groups:
         if ("group", group.id) in dependency_child_keys:
@@ -939,10 +981,12 @@ def get_results(project_id: str, db: Session = Depends(get_db)):
             "name": child.name, "status": child.status,
             "features": ([{"id": f.id, "name": f.name, "status": f.status} for f in child.features] if edge.child_type == "group" else []),
         })
-    ranked = sorted(items, key=lambda item: (-totals.get(item["key"], 0), item["name"].casefold()))
+    total_points = sum(combined_score(item["key"])[0] for item in items)
+
+    ranked = sorted(items, key=lambda item: (-combined_score(item["key"])[0], item["name"].casefold()))
     results = []
     for rank, item in enumerate(ranked, start=1):
-        score = totals.get(item["key"], 0)
+        score, contributor_count = combined_score(item["key"])
         share = score / total_points * 100 if total_points else 0
         results.append({
             "rank": rank,
@@ -956,8 +1000,8 @@ def get_results(project_id: str, db: Session = Depends(get_db)):
             "share": round(share, 1),
             "priority": round(share, 1),
             "totalScore": score,
-            "contributors": contributors.get(item["key"], 0),
-            "stakeholderCount": contributors.get(item["key"], 0),
+            "contributors": contributor_count,
+            "stakeholderCount": contributor_count,
         })
     return {
         "projectName": project.name,

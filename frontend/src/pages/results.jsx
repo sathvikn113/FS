@@ -419,7 +419,7 @@ export default function Results() {
                             {item.dependencies?.length > 0 && (
                               <Box sx={{ mt: 1, ml: 0.5, pl: 1.5, py: 0.75, borderLeft: "3px solid", borderColor: "warning.main", bgcolor: "action.hover", borderRadius: 1 }}>
                                 <Typography variant="caption" fontWeight={750} color="warning.main" sx={{ display: "block", mb: 0.75 }}>
-                                  DEPENDENT ITEMS · UNLOCKED AFTER THIS IS IMPLEMENTED
+                                  DEPENDENT FEATURES
                                 </Typography>
                                 <Stack spacing={0.75}>
                                   {item.dependencies.map((child) => (

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Accordion,
+  Autocomplete,
   AccordionDetails,
   AccordionSummary,
   Alert,
@@ -77,10 +78,8 @@ export default function ProjectDetail() {
   const [featureGroups, setFeatureGroups] = useState([]);
   const [dependencyRows, setDependencyRows] = useState([]);
   const [dependencyDialogOpen, setDependencyDialogOpen] = useState(false);
-  const [dependencyParentType, setDependencyParentType] = useState("feature");
-  const [dependencyParentId, setDependencyParentId] = useState("");
-  const [dependencyChildType, setDependencyChildType] = useState("feature");
-  const [dependencyChildId, setDependencyChildId] = useState("");
+  const [dependencyParentKey, setDependencyParentKey] = useState("");
+  const [selectedDependencyChildren, setSelectedDependencyChildren] = useState([]);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [groupName, setGroupName] = useState("");
   const [groupKind, setGroupKind] = useState("group");
@@ -506,21 +505,46 @@ export default function ProjectDetail() {
       .map((item) => ({ id: item.id, name: item.name }));
   };
 
+  const dependencyParentOptions = useMemo(() => [
+    ...dependencyChoices("feature").map((item) => ({ ...item, type: "feature", label: `${item.name} · Feature` })),
+    ...dependencyChoices("group").map((item) => ({ ...item, type: "group", label: `${item.name} · Feature group` })),
+  ], [activeFeatures, featureGroups]);
+
+  const dependencyChildOptions = useMemo(() => {
+    const alreadyDependent = new Set(dependencyRows.map((row) => `${row.child_type}:${row.child_id}`));
+    return [
+      ...dependencyChoices("feature").map((item) => ({ ...item, type: "feature", label: `${item.name} · Feature` })),
+      ...dependencyChoices("group").map((item) => ({ ...item, type: "group", label: `${item.name} · Feature group` })),
+    ].filter((item) =>
+      !alreadyDependent.has(`${item.type}:${item.id}`) &&
+      `${item.type}:${item.id}` !== dependencyParentKey
+    );
+  }, [activeFeatures, featureGroups, dependencyRows, dependencyParentKey]);
+
   const createDependency = async (event) => {
     event?.preventDefault();
-    if (!canManageFeatures || !dependencyParentId || !dependencyChildId) return;
-    await runMutation("create-dependency", () => api.createDependency(id, {
-      parent_type: dependencyParentType,
-      parent_id: dependencyParentId,
-      child_type: dependencyChildType,
-      child_id: dependencyChildId,
-    }), async (created) => {
-      const nextDependencies = [...dependencyRows, created];
+    if (!canManageFeatures || !dependencyParentKey || selectedDependencyChildren.length === 0) return;
+
+    const [parentType, parentId] = dependencyParentKey.split(":");
+    await runMutation("create-dependency", async () => {
+      const createdRows = [];
+      for (const child of selectedDependencyChildren) {
+        const created = await api.createDependency(id, {
+          parent_type: parentType,
+          parent_id: parentId,
+          child_type: child.type,
+          child_id: child.id,
+        });
+        createdRows.push(created);
+      }
+      return createdRows;
+    }, (createdRows) => {
+      const nextDependencies = [...dependencyRows, ...createdRows];
       setDependencyRows(nextDependencies);
       setAllocation((current) => reconcile(features, current, featureGroups, nextDependencies));
       setDependencyDialogOpen(false);
-      setDependencyParentId("");
-      setDependencyChildId("");
+      setDependencyParentKey("");
+      setSelectedDependencyChildren([]);
     });
   };
 
@@ -768,7 +792,7 @@ const renderFeature = (feature, implemented = false) => {
       {children.length > 0 && (
         <Box sx={{ ml: { xs: 1.5, sm: 3 }, mt: 0.5, mb: 1.25, pl: 1.5, borderLeft: "3px solid", borderColor: "warning.main", bgcolor: "action.hover", borderRadius: 1, py: 1, pr: 1.25 }}>
           <Typography variant="caption" color="warning.main" fontWeight={750} sx={{ display: "block", mb: 0.75 }}>
-            DEPENDS ON THIS FIRST
+            DEPENDENT FEATURES
           </Typography>
           <Stack spacing={0.75}>
             {children.map((child) => {
@@ -779,7 +803,7 @@ const renderFeature = (feature, implemented = false) => {
                 <Stack key={child.id} direction="row" spacing={1} sx={{ alignItems: "center", justifyContent: "space-between" }}>
                   <Box sx={{ minWidth: 0 }}>
                     <Typography variant="body2" fontWeight={650}>{childLabel}</Typography>
-                    <Typography variant="caption" color="text.secondary">{child.child_type === "group" ? "Dependent feature group" : "Dependent feature"} · Locked from separate prioritization</Typography>
+                    {/* <Typography variant="caption" color="text.secondary">{child.child_type === "group" ? "Dependent feature group" : "Dependent feature"} </Typography> */}
                     {childGroup?.features?.length > 0 && (
                       <Stack spacing={0.25} sx={{ mt: 0.5, pl: 1.25, borderLeft: "2px solid", borderColor: "divider" }}>
                         {childGroup.features.map((member) => (
@@ -974,7 +998,7 @@ const renderFeature = (feature, implemented = false) => {
                 <Button size="small" variant="outlined" onClick={() => { setGroupKind("group"); setGroupDialogOpen(true); }}>
                   Group features
                 </Button>
-                <Button size="small" variant="outlined" onClick={() => { setDependencyParentType("feature"); setDependencyChildType("feature"); setDependencyParentId(""); setDependencyChildId(""); setDependencyDialogOpen(true); }}>
+                <Button size="small" variant="outlined" onClick={() => { setDependencyParentKey(""); setSelectedDependencyChildren([]); setDependencyDialogOpen(true); }}>
                   Add dependency
                 </Button>
               </Stack>
@@ -1024,7 +1048,6 @@ const renderFeature = (feature, implemented = false) => {
                 fullWidth
                 required
                 label="Feature name"
-                placeholder="e.g. Saved searches"
                 value={featureName}
                 onChange={(event) => setFeatureName(event.target.value)}
                 slotProps={{ htmlInput: { maxLength: 255 } }}
@@ -1331,23 +1354,42 @@ const renderFeature = (feature, implemented = false) => {
     <DialogContent>
       <DialogContentText sx={{ mb: 2 }}></DialogContentText>
       <Stack spacing={2}>
-        <TextField select fullWidth label="Parent type" value={dependencyParentType} onChange={(event) => { setDependencyParentType(event.target.value); setDependencyParentId(""); }}>
-          <MenuItem value="feature">Feature</MenuItem><MenuItem value="group">Feature group</MenuItem>
+        <TextField select fullWidth label="Parent item" value={dependencyParentKey} onChange={(event) => { setDependencyParentKey(event.target.value); setSelectedDependencyChildren([]); }}>
+          {dependencyParentOptions.map((item) => (
+            <MenuItem key={`${item.type}:${item.id}`} value={`${item.type}:${item.id}`}>{item.label}</MenuItem>
+          ))}
         </TextField>
-        <TextField select fullWidth label="Parent item" value={dependencyParentId} onChange={(event) => setDependencyParentId(event.target.value)}>
-          {dependencyChoices(dependencyParentType).map((item) => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
-        </TextField>
-        <TextField select fullWidth label="Dependent item type" value={dependencyChildType} onChange={(event) => { setDependencyChildType(event.target.value); setDependencyChildId(""); }}>
-          <MenuItem value="feature">Feature</MenuItem><MenuItem value="group">Feature group</MenuItem>
-        </TextField>
-        <TextField select fullWidth label="Dependent item" value={dependencyChildId} onChange={(event) => setDependencyChildId(event.target.value)}>
-          {dependencyChoices(dependencyChildType).map((item) => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
-        </TextField>
+        <Autocomplete
+          multiple
+          options={dependencyChildOptions}
+          value={selectedDependencyChildren}
+          onChange={(_, value) => setSelectedDependencyChildren(value)}
+          isOptionEqualToValue={(option, value) => option.type === value.type && option.id === value.id}
+          getOptionLabel={(option) => option.label || `${option.name} · ${option.type === "group" ? "Feature group" : "Feature"}`}
+          filterSelectedOptions
+          disableCloseOnSelect
+          renderInput={(params) => (
+            <TextField
+              {...params}
+              label="Dependent items"
+              placeholder="Search and select features or groups"
+              helperText="Select multiple features and/or feature groups."
+            />
+          )}
+          renderTags={(value, getTagProps) => value.map((option, index) => (
+            <Chip
+              {...getTagProps({ index })}
+              key={`${option.type}:${option.id}`}
+              label={option.label}
+              size="small"
+            />
+          ))}
+        />
       </Stack>
     </DialogContent>
     <DialogActions>
       <Button onClick={() => setDependencyDialogOpen(false)} disabled={Boolean(pendingAction)}>Cancel</Button>
-      <Button type="submit" variant="contained" disabled={!dependencyParentId || !dependencyChildId || (dependencyParentType === dependencyChildType && dependencyParentId === dependencyChildId) || Boolean(pendingAction)}>{pendingAction === "create-dependency" ? "Creating…" : "Create dependency"}</Button>
+      <Button type="submit" variant="contained" disabled={!dependencyParentKey || selectedDependencyChildren.length === 0 || Boolean(pendingAction)}>{pendingAction === "create-dependency" ? "Creating…" : "Create dependency"}</Button>
     </DialogActions>
   </Box>
 </Dialog>

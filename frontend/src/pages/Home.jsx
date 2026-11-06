@@ -833,8 +833,7 @@ export default function Home() {
         <DialogContent>
           <DialogContentText sx={{ mb: 2 }}>
             Set the support email users will see for{" "}
-            <strong>{supportEmailDialogProject?.name}</strong>. Users can view
-            and copy this address, but cannot change it.
+            <strong>{supportEmailDialogProject?.name}</strong>
           </DialogContentText>
           <TextField
             autoFocus
