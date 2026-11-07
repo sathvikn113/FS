@@ -59,10 +59,11 @@ def get_current_user(request: Request) -> dict:
     subject = request.headers.get("X-Authenticated-User")
     username = request.headers.get("X-Authenticated-Username")
     email = request.headers.get("X-Authenticated-Email")
-    groups_header = request.headers.get("X-Authenticated-Groups")
+    groups_header = request.headers.get("X-Authenticated-Groups", "")
+
     print("DEBUG USER:", subject)
     print("DEBUG GROUPS HEADER:", repr(groups_header))
-    print("USERNAME HEADER:", repr(request.headers.get("X-Authenticated-Username")))
+    print("USERNAME HEADER:", repr(username))
 
     if not subject:
         raise HTTPException(
@@ -70,51 +71,63 @@ def get_current_user(request: Request) -> dict:
             detail="Not authenticated",
         )
 
-    groups = []
-
-    if groups_header:
-        groups = [
-            item.strip()
-            for item in groups_header.split(",")
-            if item.strip()
-        ]
-
-    # Extract application roles from Keycloak group paths
-    roles = set()
-
-    for group in groups:
-        normalized = group.strip("/")
-
-        if normalized == "main_admin":
-            roles.add("main_admin")
-
-        elif normalized == "app_admin" or normalized.endswith("/app_admin"):
-            roles.add("app_admin")
-
-        elif normalized == "users":
-            roles.add("users")
-
-    # Keep project-specific groups for project-level authorization
-    project_groups = [
-        group for group in groups
-        if group.startswith("/") and group.strip("/")
+    # OAuth2 Proxy is forwarding Keycloak client roles in this header,
+    # for example: role:Features_Selector:main_admin.
+    # It also forwards project group paths, for example:
+    # /DevStation/app_admin.
+    header_items = [
+        item.strip()
+        for item in groups_header.split(",")
+        if item.strip()
     ]
+
+    roles = set()
+    project_groups = []
+
+    for item in header_items:
+        if item.startswith("role:"):
+            role_value = item[len("role:"):].strip()
+            role_parts = role_value.split(":")
+
+            # Recognise only the application roles from our Keycloak client.
+            if len(role_parts) >= 2 and role_parts[-2] == "Features_Selector":
+                role_name = role_parts[-1]
+                if role_name in {"main_admin", "app_admin", "users"}:
+                    roles.add(role_name)
+            elif role_value in {"main_admin", "app_admin", "users"}:
+                # Also support a role forwarded without the client prefix.
+                roles.add(role_value)
+            continue
+
+        # Keep only actual Keycloak group paths for project-level checks.
+        if item.startswith("/"):
+            normalized_path = "/" + "/".join(
+                part for part in item.strip("/").split("/") if part
+            )
+            if normalized_path not in project_groups:
+                project_groups.append(normalized_path)
+
+        # Backward compatibility if a deployment sends root group names
+        # instead of client roles.
+        normalized_group = item.strip("/")
+        if normalized_group in {"main_admin", "app_admin", "users"}:
+            roles.add(normalized_group)
 
     if not roles:
         raise HTTPException(
             status_code=403,
-            detail="No valid Features_Selector role found"
+            detail="No valid Features_Selector role found",
         )
 
-    username = (
-    request.headers.get("X-Authenticated-Username")
-    or (email.split("@")[0] if email else None)
-    or subject
-)
+    resolved_username = (
+        username
+        or (email.split("@")[0] if email else None)
+        or subject
+    )
 
     return {
         "id": subject,
-        "username": username or (email.split("@")[0] if email else subject),
+        "username": resolved_username,
         "email": email,
         "roles": sorted(roles),
         "groups": project_groups,
@@ -472,9 +485,10 @@ def list_feature_groups(project_id: str, db: Session = Depends(get_db)):
             "status": group.status,
             "kind": group.kind,
             "implementation_started_at": group.implementation_started_at,
+            "implemented_at": group.implemented_at,
             "created_at": group.created_at,
             "features": [
-                {"id": feature.id, "name": feature.name, "description": feature.description, "status": feature.status}
+                {"id": feature.id, "name": feature.name, "description": feature.description, "status": feature.status, "implementation_started_at": feature.implementation_started_at, "implemented_at": feature.implemented_at}
                 for feature in sorted(group.features, key=lambda item: (item.created_at, item.id))
             ],
         }
@@ -526,8 +540,9 @@ def create_feature_group(
         "status": group.status,
         "kind": group.kind,
         "implementation_started_at": group.implementation_started_at,
+        "implemented_at": group.implemented_at,
         "created_at": group.created_at,
-        "features": [{"id": f.id, "name": f.name, "description": f.description, "status": f.status, "implementation_started_at": f.implementation_started_at} for f in selected],
+        "features": [{"id": f.id, "name": f.name, "description": f.description, "status": f.status, "implementation_started_at": f.implementation_started_at, "implemented_at": f.implemented_at} for f in selected],
     }
 @app.post(
     "/api/projects/{project_id}/feature-groups/{group_id}/features"
@@ -614,10 +629,17 @@ def rename_feature_group(
         raise HTTPException(status_code=404, detail="Feature group not found")
     if body.name is not None:
         group.name = body.name
-    if body.status is not None:
+    if body.status is not None and body.status != group.status:
+        now = datetime.now(timezone.utc)
+        if body.status == "in_progress":
+            group.implementation_started_at = now
+            group.implemented_at = None
+        elif body.status == "implemented":
+            group.implemented_at = now
+        else:
+            group.implementation_started_at = None
+            group.implemented_at = None
         group.status = body.status
-        if body.status == "in_progress" and group.implementation_started_at is None:
-            group.implementation_started_at = datetime.now(timezone.utc)
         if body.status in {"implemented", "rejected"}:
             _remove_parent_dependencies(db, project_id, "group", group_id)
             db.query(FeatureDependency).filter(
@@ -635,6 +657,7 @@ def rename_feature_group(
         "status": group.status,
         "kind": group.kind,
         "implementation_started_at": group.implementation_started_at,
+        "implemented_at": group.implemented_at,
     }
 
 @app.delete("/api/projects/{project_id}/feature-groups/{group_id}/features/{feature_id}")
@@ -769,14 +792,18 @@ def update_feature(
             status_code=422,
             detail="Feature status cannot be null",
         )
-    if (
-        changes.get("status") == "in_progress"
-        and feature.implementation_started_at is None
-    ):
-        feature.implementation_started_at = datetime.now(
-            timezone.utc
-        )
-    if changes.get("status") in {"implemented", "rejected"}:
+    new_status = changes.get("status")
+    if new_status is not None and new_status != feature.status:
+        now = datetime.now(timezone.utc)
+        if new_status == "in_progress":
+            feature.implementation_started_at = now
+            feature.implemented_at = None
+        elif new_status == "implemented":
+            feature.implemented_at = now
+        else:
+            feature.implementation_started_at = None
+            feature.implemented_at = None
+    if new_status in {"implemented", "rejected"}:
         _remove_parent_dependencies(db, project_id, "feature", feature_id)
         db.query(FeatureDependency).filter(
             FeatureDependency.project_id == project_id,
@@ -956,7 +983,7 @@ def get_results(project_id: str, db: Session = Depends(get_db)):
             "name": group.name,
             "status": group.status,
             "kind": group.kind,
-            "features": [{"id": f.id, "name": f.name, "status": f.status, "implementationStartedAt": f.implementation_started_at} for f in member_features],
+            "features": [{"id": f.id, "name": f.name, "status": f.status, "implementationStartedAt": f.implementation_started_at, "implementedAt": f.implemented_at} for f in member_features],
         })
     for feature in project.features:
         if feature.group_id is None and ("feature", feature.id) not in dependency_child_keys:
@@ -968,19 +995,44 @@ def get_results(project_id: str, db: Session = Depends(get_db)):
                 "status": feature.status,
                 "kind": None,
                 "implementationStartedAt": feature.implementation_started_at,
+                "implementedAt": feature.implemented_at,
                 "features": [],
             })
-    item_lookup = {("group" if item["groupId"] else "feature", item["groupId"] or item["featureId"]): item for item in items}
-    for edge in dependency_rows:
-        parent_item = item_lookup.get((edge.parent_type, edge.parent_id))
-        if not parent_item:
-            continue
-        child = _dependency_entity(db, project_id, edge.child_type, edge.child_id)
-        parent_item.setdefault("dependencies", []).append({
-            "id": edge.id, "type": edge.child_type, "id": edge.child_id,
-            "name": child.name, "status": child.status,
-            "features": ([{"id": f.id, "name": f.name, "status": f.status} for f in child.features] if edge.child_type == "group" else []),
-        })
+    def build_dependency_tree(parent_type, parent_id, visited=None):
+        # Keep the complete chain in the results payload (C -> A -> B),
+        # while guarding against malformed/corrupt cyclic data.
+        visited = set() if visited is None else set(visited)
+        parent_key = (parent_type, parent_id)
+        if parent_key in visited:
+            return []
+        visited.add(parent_key)
+
+        nested = []
+        for edge in dependency_rows:
+            if edge.parent_type != parent_type or edge.parent_id != parent_id:
+                continue
+            child_key = (edge.child_type, edge.child_id)
+            child = _dependency_entity(db, project_id, edge.child_type, edge.child_id)
+            nested.append({
+                "id": edge.id,
+                "type": edge.child_type,
+                "id": edge.child_id,
+                "name": child.name,
+                "status": child.status,
+                "features": ([
+                    {"id": f.id, "name": f.name, "status": f.status}
+                    for f in child.features
+                ] if edge.child_type == "group" else []),
+                "dependencies": build_dependency_tree(edge.child_type, edge.child_id, visited),
+            })
+        return nested
+
+    for item in items:
+        item_type = "group" if item["groupId"] else "feature"
+        item_id = item["groupId"] or item["featureId"]
+        item["dependencies"] = build_dependency_tree(item_type, item_id)
+    # Sum each top-level item after dependency scores have been rolled into parents.
+    # This preserves group aggregation and prevents dependency children being counted twice.
     total_points = sum(combined_score(item["key"])[0] for item in items)
 
     ranked = sorted(items, key=lambda item: (-combined_score(item["key"])[0], item["name"].casefold()))

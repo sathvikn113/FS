@@ -39,6 +39,10 @@ export default function FeatureCard({
     feature.implementation_started_at
   );
 
+  const implementedDate = formatStartDate(
+    feature.implemented_at
+  );
+
   const currentStatus =
     IMPLEMENTATION_STATUSES.find(
       (item) => item.value === feature.status
@@ -64,6 +68,7 @@ export default function FeatureCard({
         <FeatureInfo
           feature={feature}
           startDate={startDate}
+          implementedDate={implementedDate}
         />
 
         <Stack
@@ -238,7 +243,7 @@ export default function FeatureCard({
                 </IconButton>
               </Tooltip>
 
-              {!feature.isGroup && <Tooltip title={`Delete ${feature.name}`}>
+              {(!feature.isGroup || implemented) && <Tooltip title={`Delete ${feature.name}`}>
                 <IconButton
                   aria-label={`Delete ${feature.name}`}
                   color="error"
@@ -273,15 +278,7 @@ export default function FeatureCard({
             color: "primary.main",
           }}
         />
-      ) : (
-        <Typography
-          variant="body2"
-          color="text.secondary"
-          sx={{ mt: 0.5 }}
-        >
-          This feature is excluded from new allocations.
-        </Typography>
-      )}
+      ) : null}
     </Box>
   );
 }

@@ -44,6 +44,7 @@ class FeatureGroup(Base):
     status = Column(String(20), nullable=False, default="pending", server_default="pending")
     kind = Column(String(20), nullable=False, default="group", server_default="group")
     implementation_started_at = Column(DateTime(timezone=True), nullable=True)
+    implemented_at = Column(DateTime(timezone=True), nullable=True)
     created_by = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -84,6 +85,7 @@ class Feature(Base):
     description = Column(Text, nullable=True)
     status = Column(String(20), nullable=False, default="pending", server_default="pending")
     implementation_started_at = Column(DateTime(timezone=True), nullable=True)
+    implemented_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     project = relationship("Project", back_populates="features")

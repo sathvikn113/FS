@@ -3,6 +3,7 @@ import { Box, Typography } from "@mui/material";
 export default function FeatureInfo({
   feature,
   startDate,
+  implementedDate,
 }) {
   return (
     <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -31,7 +32,17 @@ export default function FeatureInfo({
           color="text.secondary"
           sx={{ mt: 0.25 }}
         >
-          Implementation started {startDate}
+          Implementation started on {startDate}
+        </Typography>
+      )}
+
+      {implementedDate && (
+        <Typography
+          variant="body2"
+          color="text.secondary"
+          sx={{ mt: 0.25 }}
+        >
+          Implemented on {implementedDate}
         </Typography>
       )}
     </Box>

@@ -88,6 +88,103 @@ function StatCard({ icon, label, value, hint }) {
   );
 }
 
+function DependencyTree({ dependencies, depth = 0 }) {
+  if (!Array.isArray(dependencies) || dependencies.length === 0) return null;
+
+  return (
+    <Box
+      sx={
+        depth === 0
+          ? {
+              mt: 1,
+              ml: 0.5,
+              pl: 1.5,
+              py: 0.9,
+              pr: 1,
+              borderLeft: "3px solid",
+              borderColor: "warning.main",
+              bgcolor: "action.hover",
+              borderRadius: 1,
+            }
+          : {
+              ml: { xs: 1.5, sm: 2.5 },
+              mt: 0.75,
+              pl: 1.25,
+              borderLeft: "2px solid",
+              borderColor: "divider",
+            }
+      }
+    >
+      {depth === 0 && (
+        <Typography
+          variant="caption"
+          fontWeight={750}
+          color="warning.main"
+          sx={{ display: "block", mb: 0.75 }}
+        >
+          DEPENDENCY FEATURES
+        </Typography>
+      )}
+
+      <Stack spacing={0.75}>
+        {dependencies.map((child) => (
+          <Box key={`${child.type}:${child.id}`} sx={{ minWidth: 0 }}>
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{ alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}
+            >
+              <Typography variant="body2" fontWeight={650} sx={{ overflowWrap: "anywhere" }}>
+                {child.name}
+              </Typography>
+              <Chip
+                size="small"
+                variant="outlined"
+                label={STATUS_LABELS[child.status] || child.status || "Pending"}
+              />
+            </Stack>
+
+            {child.features?.length > 0 && (
+              <Stack
+                spacing={0.35}
+                sx={{
+                  ml: { xs: 1.5, sm: 2.5 },
+                  mt: 0.5,
+                  pl: 1.25,
+                  borderLeft: "2px solid",
+                  borderColor: "divider",
+                }}
+              >
+                {child.features.map((member) => (
+                  <Stack
+                    key={member.id}
+                    direction="row"
+                    spacing={1}
+                    sx={{ alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}
+                  >
+                    <Typography variant="caption" color="text.secondary">
+                      {member.name}
+                    </Typography>
+                    {member.status && (
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        label={STATUS_LABELS[member.status] || member.status}
+                      />
+                    )}
+                  </Stack>
+                ))}
+              </Stack>
+            )}
+
+            <DependencyTree dependencies={child.dependencies} depth={depth + 1} />
+          </Box>
+        ))}
+      </Stack>
+    </Box>
+  );
+}
+
 export default function Results() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -416,30 +513,7 @@ export default function Results() {
                               </Accordion>
                             )}
 
-                            {item.dependencies?.length > 0 && (
-                              <Box sx={{ mt: 1, ml: 0.5, pl: 1.5, py: 0.75, borderLeft: "3px solid", borderColor: "warning.main", bgcolor: "action.hover", borderRadius: 1 }}>
-                                <Typography variant="caption" fontWeight={750} color="warning.main" sx={{ display: "block", mb: 0.75 }}>
-                                  DEPENDENT FEATURES
-                                </Typography>
-                                <Stack spacing={0.75}>
-                                  {item.dependencies.map((child) => (
-                                    <Box key={`${child.type}:${child.id}`}>
-                                      <Stack direction="row" spacing={1} sx={{ alignItems: "center", justifyContent: "space-between" }}>
-                                        <Typography variant="body2" fontWeight={650}>{child.name}</Typography>
-                                        <Chip size="small" variant="outlined" label={STATUS_LABELS[child.status] || child.status || "Pending"} />
-                                      </Stack>
-                                      {child.features?.length > 0 && (
-                                        <Stack spacing={0.35} sx={{ ml: 1.5, mt: 0.5, pl: 1, borderLeft: "1px solid", borderColor: "divider" }}>
-                                          {child.features.map((member) => (
-                                            <Typography key={member.id} variant="caption" color="text.secondary">• {member.name}</Typography>
-                                          ))}
-                                        </Stack>
-                                      )}
-                                    </Box>
-                                  ))}
-                                </Stack>
-                              </Box>
-                            )}
+                            <DependencyTree dependencies={item.dependencies} />
                           </Box>
                         </Stack>
                       </Box>

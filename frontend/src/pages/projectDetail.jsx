@@ -151,6 +151,7 @@ export default function ProjectDetail() {
         status: group.status || "pending",
         kind: group.kind || "group",
         implementation_started_at: group.implementation_started_at,
+        implemented_at: group.implemented_at,
         isGroup: true,
         memberFeatures: group.features.filter((feature) => !["implemented", "rejected"].includes(feature.status)),
       }))
@@ -413,8 +414,8 @@ export default function ProjectDetail() {
               ? {
                   ...group,
                   status: updated.status || status,
-                  implementation_started_at:
-                    updated.implementation_started_at ?? group.implementation_started_at,
+                  implementation_started_at: updated.implementation_started_at,
+                  implemented_at: updated.implemented_at,
                 }
               : group
           );
@@ -444,16 +445,54 @@ export default function ProjectDetail() {
     if (!canManageFeatures) return;
     if (!deleteTarget || pendingRef.current) return;
 
+    const isGroup = Boolean(deleteTarget.isGroup);
+    const targetId = isGroup ? deleteTarget.groupId : deleteTarget.id;
+
+    // Groups can only be deleted after reaching Implemented or Rejected.
+    if (
+      isGroup &&
+      !["implemented", "rejected"].includes(deleteTarget.status)
+    ) {
+      return;
+    }
+
     await runMutation(
       `delete-${deleteTarget.id}`,
-      () => api.deleteFeature(id, deleteTarget.id),
+      () =>
+        isGroup
+          ? api.deleteFeatureGroup(id, targetId)
+          : api.deleteFeature(id, targetId),
       () => {
-        const next = features.filter(
-          (feature) => feature.id !== deleteTarget.id
-        );
+        if (isGroup) {
+          const deletedGroup = featureGroups.find(
+            (group) => group.id === targetId
+          );
+          const memberIds = new Set(
+            (deletedGroup?.features || []).map((feature) => feature.id)
+          );
+          const nextFeatures = features.map((feature) =>
+            memberIds.has(feature.id)
+              ? { ...feature, group_id: null }
+              : feature
+          );
+          const nextGroups = featureGroups.filter(
+            (group) => group.id !== targetId
+          );
 
-        setFeatures(next);
-        setAllocation((current) => reconcile(next, current));
+          setFeatures(nextFeatures);
+          setFeatureGroups(nextGroups);
+          setAllocation((current) =>
+            reconcile(nextFeatures, current, nextGroups, dependencyRows)
+          );
+        } else {
+          const next = features.filter(
+            (feature) => feature.id !== targetId
+          );
+
+          setFeatures(next);
+          setAllocation((current) => reconcile(next, current));
+        }
+
         setDeleteTarget(null);
       }
     );
@@ -765,6 +804,50 @@ const {
     );
   }
 
+// Render every level of a dependency chain, not just the first dependent item.
+const renderDependencyNode = (dependency, depth = 0) => {
+  const childGroup = dependency.child_type === "group"
+    ? featureGroups.find((group) => group.id === dependency.child_id)
+    : null;
+  const childFeature = dependency.child_type === "feature"
+    ? features.find((item) => item.id === dependency.child_id)
+    : null;
+  const childLabel = dependency.child_name || childGroup?.name || childFeature?.name || "Dependent item";
+  const nestedDependencies = dependencyRows.filter(
+    (row) => row.parent_type === dependency.child_type && row.parent_id === dependency.child_id
+  );
+
+  return (
+    <Box key={dependency.id} sx={{ minWidth: 0 }}>
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center", justifyContent: "space-between" }}>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="body2" fontWeight={650}>{childLabel}</Typography>
+          {childGroup?.features?.length > 0 && (
+            <Stack spacing={0.25} sx={{ mt: 0.5, pl: 1.25, borderLeft: "2px solid", borderColor: "divider" }}>
+              {childGroup.features.map((member) => (
+                <Typography key={member.id} variant="caption" color="text.secondary">{member.name}</Typography>
+              ))}
+            </Stack>
+          )}
+        </Box>
+        {canManageFeatures && (
+          <Button size="small" color="inherit" onClick={() => removeDependency(dependency)} disabled={Boolean(pendingAction)}>
+            Remove
+          </Button>
+        )}
+      </Stack>
+
+      {nestedDependencies.length > 0 && (
+        <Box sx={{ ml: { xs: 1.5, sm: 2.5 }, mt: 0.75, pl: 1.25, borderLeft: "2px solid", borderColor: "divider" }}>
+          <Stack spacing={0.75}>
+            {nestedDependencies.map((nested) => renderDependencyNode(nested, depth + 1))}
+          </Stack>
+        </Box>
+      )}
+    </Box>
+  );
+};
+
 const renderFeature = (feature, implemented = false) => {
   const parentType = feature.isGroup ? "group" : "feature";
   const parentId = feature.isGroup ? feature.groupId : feature.id;
@@ -792,30 +875,10 @@ const renderFeature = (feature, implemented = false) => {
       {children.length > 0 && (
         <Box sx={{ ml: { xs: 1.5, sm: 3 }, mt: 0.5, mb: 1.25, pl: 1.5, borderLeft: "3px solid", borderColor: "warning.main", bgcolor: "action.hover", borderRadius: 1, py: 1, pr: 1.25 }}>
           <Typography variant="caption" color="warning.main" fontWeight={750} sx={{ display: "block", mb: 0.75 }}>
-            DEPENDENT FEATURES
+            DEPENDENCY FEATURES
           </Typography>
           <Stack spacing={0.75}>
-            {children.map((child) => {
-              const childGroup = child.child_type === "group" ? featureGroups.find((group) => group.id === child.child_id) : null;
-              const childFeature = child.child_type === "feature" ? features.find((item) => item.id === child.child_id) : null;
-              const childLabel = child.child_name || childGroup?.name || childFeature?.name || "Dependent item";
-              return (
-                <Stack key={child.id} direction="row" spacing={1} sx={{ alignItems: "center", justifyContent: "space-between" }}>
-                  <Box sx={{ minWidth: 0 }}>
-                    <Typography variant="body2" fontWeight={650}>{childLabel}</Typography>
-                    {/* <Typography variant="caption" color="text.secondary">{child.child_type === "group" ? "Dependent feature group" : "Dependent feature"} </Typography> */}
-                    {childGroup?.features?.length > 0 && (
-                      <Stack spacing={0.25} sx={{ mt: 0.5, pl: 1.25, borderLeft: "2px solid", borderColor: "divider" }}>
-                        {childGroup.features.map((member) => (
-                          <Typography key={member.id} variant="caption" color="text.secondary">{member.name}</Typography>
-                        ))}
-                      </Stack>
-                    )}
-                  </Box>
-                  {canManageFeatures && <Button size="small" color="inherit" onClick={() => removeDependency(child)} disabled={Boolean(pendingAction)}>Remove</Button>}
-                </Stack>
-              );
-            })}
+            {children.map((child) => renderDependencyNode(child))}
           </Stack>
         </Box>
       )}
@@ -1220,6 +1283,7 @@ const renderFeature = (feature, implemented = false) => {
                       description: group.description || `${group.features.length} ${group.kind === "depends" ? "dependent features" : "grouped features"}`,
                       status: group.status || "implemented",
                       implementation_started_at: group.implementation_started_at,
+                      implemented_at: group.implemented_at,
                       isGroup: true,
                     };
                     return (
@@ -1333,7 +1397,7 @@ const renderFeature = (feature, implemented = false) => {
   <Box component="form" onSubmit={createFeatureGroup}>
     <DialogTitle>Group features</DialogTitle>
     <DialogContent>
-      <DialogContentText sx={{ mb: 2 }}>Choose at least two ungrouped, active features. This group will receive one allocation slider.</DialogContentText>
+      <DialogContentText sx={{ mb: 0.8 }}></DialogContentText>
       <TextField fullWidth required label="Group name" value={groupName} onChange={(event) => setGroupName(event.target.value)} sx={{ mb: 2 }} inputProps={{ maxLength: 255 }} />
       <FormGroup>
         {activeFeatures.filter((feature) => !feature.group_id && !featureGroups.some((group) => group.features.some((member) => member.id === feature.id))).map((feature) => (
@@ -1354,7 +1418,7 @@ const renderFeature = (feature, implemented = false) => {
     <DialogContent>
       <DialogContentText sx={{ mb: 2 }}></DialogContentText>
       <Stack spacing={2}>
-        <TextField select fullWidth label="Parent item" value={dependencyParentKey} onChange={(event) => { setDependencyParentKey(event.target.value); setSelectedDependencyChildren([]); }}>
+        <TextField select fullWidth label="Prerequisite Feature" value={dependencyParentKey} onChange={(event) => { setDependencyParentKey(event.target.value); setSelectedDependencyChildren([]); }}>
           {dependencyParentOptions.map((item) => (
             <MenuItem key={`${item.type}:${item.id}`} value={`${item.type}:${item.id}`}>{item.label}</MenuItem>
           ))}
@@ -1371,9 +1435,9 @@ const renderFeature = (feature, implemented = false) => {
           renderInput={(params) => (
             <TextField
               {...params}
-              label="Dependent items"
+              label="Dependent features"
               placeholder="Search and select features or groups"
-              helperText="Select multiple features and/or feature groups."
+              helperText="Select one or more dependent features."
             />
           )}
           renderTags={(value, getTagProps) => value.map((option, index) => (
@@ -1470,10 +1534,15 @@ const renderFeature = (feature, implemented = false) => {
   }}
   aria-labelledby="delete-feature-dialog-title"
 >
-  <DialogTitle id="delete-feature-dialog-title">Delete feature?</DialogTitle>
+  <DialogTitle id="delete-feature-dialog-title">
+    Delete {deleteTarget?.isGroup ? "feature group" : "feature"}?
+  </DialogTitle>
   <DialogContent>
     <DialogContentText>
-      Are you sure you want to delete “{deleteTarget?.name}”? This action cannot be undone.
+      Are you sure you want to delete “{deleteTarget?.name}”?
+      {deleteTarget?.isGroup
+        ? " The group will be removed, but its individual features will remain in the project as ungrouped features."
+        : " This action cannot be undone."}
     </DialogContentText>
   </DialogContent>
   <DialogActions>
