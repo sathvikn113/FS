@@ -104,6 +104,7 @@ export default function ProjectDetail() {
   const [featureName, setFeatureName] = useState("");
   const [featureDescription, setFeatureDescription] = useState("");
   const [featureSearch, setFeatureSearch] = useState("");
+  const [expandedFeatureGroups, setExpandedFeatureGroups] = useState({});
   const [stakeholder] = useState("");
 
   const [editingFeature, setEditingFeature] = useState(null);
@@ -161,17 +162,44 @@ export default function ProjectDetail() {
 
   const normalizedFeatureSearch = featureSearch.trim().toLowerCase();
 
+  // A search hit anywhere in a dependency chain should keep its top-level
+  // parent visible, so users can see the complete path to the matching item.
+  const dependencyTreeMatchesSearch = (parentType, parentId, visited = new Set()) => {
+    if (!normalizedFeatureSearch) return false;
+    const key = `${parentType}:${parentId}`;
+    if (visited.has(key)) return false;
+    const nextVisited = new Set(visited);
+    nextVisited.add(key);
+
+    return dependencyRows
+      .filter((row) => row.parent_type === parentType && row.parent_id === parentId)
+      .some((row) => {
+        const childGroup = row.child_type === "group"
+          ? featureGroups.find((group) => group.id === row.child_id)
+          : null;
+        const childFeature = row.child_type === "feature"
+          ? features.find((feature) => feature.id === row.child_id)
+          : null;
+        const childText = `${row.child_name || ""} ${childGroup?.name || ""} ${childFeature?.name || ""} ${childFeature?.description || ""}`;
+        const groupMemberMatches = childGroup?.features?.some((member) =>
+          `${member.name || ""} ${member.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)
+        );
+        return childText.toLowerCase().includes(normalizedFeatureSearch) ||
+          groupMemberMatches ||
+          dependencyTreeMatchesSearch(row.child_type, row.child_id, nextVisited);
+      });
+  };
+
   const filteredActiveFeatures = useMemo(
     () =>
       activeFeatures.filter((feature) => {
         if (feature.group_id || featureGroups.some((group) => group.features.some((member) => member.id === feature.id))) return false;
         if (dependencyRows.some((row) => row.child_type === "feature" && row.child_id === feature.id)) return false;
-        const childText = dependencyRows.filter((row) => row.parent_type === "feature" && row.parent_id === feature.id).map((row) => row.child_name || "").join(" ");
         if (!normalizedFeatureSearch) return true;
         return (
           (feature.name || "").toLowerCase().includes(normalizedFeatureSearch) ||
           (feature.description || "").toLowerCase().includes(normalizedFeatureSearch) ||
-          childText.toLowerCase().includes(normalizedFeatureSearch)
+          dependencyTreeMatchesSearch("feature", feature.id)
         );
       }),
     [activeFeatures, normalizedFeatureSearch, featureGroups, dependencyRows]
@@ -184,10 +212,11 @@ export default function ProjectDetail() {
 
         return (
           (feature.name || "").toLowerCase().includes(normalizedFeatureSearch) ||
-          (feature.description || "").toLowerCase().includes(normalizedFeatureSearch)
+          (feature.description || "").toLowerCase().includes(normalizedFeatureSearch) ||
+          dependencyTreeMatchesSearch("feature", feature.id)
         );
       }),
-    [implementedFeatures, normalizedFeatureSearch]
+    [implementedFeatures, normalizedFeatureSearch, dependencyRows, featureGroups, features]
   );
 
   const filteredImplementedGroups = useMemo(
@@ -198,10 +227,10 @@ export default function ProjectDetail() {
         (group.name || "").toLowerCase().includes(normalizedFeatureSearch) ||
         group.features.some((feature) =>
           `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)
-        ) || dependencyRows.some((row) => row.parent_type === "group" && row.parent_id === group.id && (row.child_name || "").toLowerCase().includes(normalizedFeatureSearch))
+        ) || dependencyTreeMatchesSearch("group", group.id)
       );
     }),
-    [featureGroups, normalizedFeatureSearch, dependencyRows]
+    [featureGroups, normalizedFeatureSearch, dependencyRows, features]
   );
 
   const activeTotal = useMemo(
@@ -1150,10 +1179,11 @@ const renderFeature = (feature, implemented = false) => {
             </Stack>
           )}
 
-          {featureGroups.filter((group) => !["implemented", "rejected"].includes(group.status) && group.features.some((feature) => !["implemented", "rejected"].includes(feature.status)) && (!normalizedFeatureSearch || group.name.toLowerCase().includes(normalizedFeatureSearch) || group.features.some((feature) => `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)))).map((group) => {
+          {featureGroups.filter((group) => !["implemented", "rejected"].includes(group.status) && group.features.some((feature) => !["implemented", "rejected"].includes(feature.status)) && (!normalizedFeatureSearch || group.name.toLowerCase().includes(normalizedFeatureSearch) || group.features.some((feature) => `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)) || dependencyTreeMatchesSearch("group", group.id))).map((group) => {
             const groupItem = prioritizationItems.find((item) => item.groupId === group.id);
             if (!groupItem) return null;
-            const members = group.features.filter((feature) => !["implemented", "rejected"].includes(feature.status) && (!normalizedFeatureSearch || group.name.toLowerCase().includes(normalizedFeatureSearch) || `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)));
+            const groupNameMatches = Boolean(normalizedFeatureSearch && group.name.toLowerCase().includes(normalizedFeatureSearch));
+            const members = group.features.filter((feature) => !["implemented", "rejected"].includes(feature.status) && (!normalizedFeatureSearch || groupNameMatches || `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)));
             return (
               <Box key={group.id} sx={{ borderTop: "1px solid", borderColor: "divider", pb: 0.25 }}>
                 <Stack direction="row" justifyContent="flex-end" sx={{ pt: 1, px: 1 }}>
@@ -1171,7 +1201,21 @@ const renderFeature = (feature, implemented = false) => {
                   )}
                 </Stack>
                 {renderFeature(groupItem)}
-                <Accordion disableGutters elevation={0} sx={{ bgcolor: "transparent", "&::before": { display: "none" } }}>
+                <Accordion
+                  expanded={
+                    Boolean(normalizedFeatureSearch && (groupNameMatches || members.length > 0)) ||
+                    Boolean(expandedFeatureGroups[group.id])
+                  }
+                  onChange={(_, isExpanded) =>
+                    setExpandedFeatureGroups((current) => ({
+                      ...current,
+                      [group.id]: isExpanded,
+                    }))
+                  }
+                  disableGutters
+                  elevation={0}
+                  sx={{ bgcolor: "transparent", "&::before": { display: "none" } }}
+                >
                   <AccordionSummary expandIcon={<ExpandMoreRoundedIcon />} sx={{ px: 1 }}>
                     <Typography variant="body2" fontWeight={650}>View</Typography>
                   </AccordionSummary>
@@ -1193,7 +1237,7 @@ const renderFeature = (feature, implemented = false) => {
             );
           })}
 
-          {filteredActiveFeatures.length === 0 && !featureGroups.some((group) => !["implemented", "rejected"].includes(group.status) && group.features.some((feature) => !["implemented", "rejected"].includes(feature.status)) && (!normalizedFeatureSearch || group.name.toLowerCase().includes(normalizedFeatureSearch) || group.features.some((feature) => `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)))) ? (
+          {filteredActiveFeatures.length === 0 && !featureGroups.some((group) => !["implemented", "rejected"].includes(group.status) && group.features.some((feature) => !["implemented", "rejected"].includes(feature.status)) && (!normalizedFeatureSearch || group.name.toLowerCase().includes(normalizedFeatureSearch) || group.features.some((feature) => `${feature.name} ${feature.description || ""}`.toLowerCase().includes(normalizedFeatureSearch)) || dependencyTreeMatchesSearch("group", group.id))) ? (
             <Box
               sx={{
                 py: 4,

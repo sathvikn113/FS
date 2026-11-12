@@ -2,7 +2,7 @@ import os
 import re
 from datetime import datetime, timezone
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -35,14 +35,6 @@ class ProjectSupportEmailIn(BaseModel):
 
 Base.metadata.create_all(bind=engine)
 
-
-OAUTH2_PROXY_AUTH_URL = os.getenv(
-    "OAUTH2_PROXY_AUTH_URL",
-    "http://127.0.0.1:4180/oauth2/auth",
-)
-
-
-
 app = FastAPI(title="Feature Prioritizer API")
 app.add_middleware(
     CORSMiddleware,
@@ -60,7 +52,7 @@ def get_current_user(request: Request) -> dict:
     username = request.headers.get("X-Authenticated-Username")
     email = request.headers.get("X-Authenticated-Email")
     groups_header = request.headers.get("X-Authenticated-Groups", "")
-
+    print("DEBUG EMAIL:",email)
     print("DEBUG USER:", subject)
     print("DEBUG GROUPS HEADER:", repr(groups_header))
     print("USERNAME HEADER:", repr(username))
@@ -71,16 +63,13 @@ def get_current_user(request: Request) -> dict:
             detail="Not authenticated",
         )
 
-    # OAuth2 Proxy is forwarding Keycloak client roles in this header,
-    # for example: role:Features_Selector:main_admin.
-    # It also forwards project group paths, for example:
-    # /DevStation/app_admin.
+  
     header_items = [
         item.strip()
         for item in groups_header.split(",")
         if item.strip()
     ]
-
+    print(header_items)
     roles = set()
     project_groups = []
 
@@ -89,7 +78,7 @@ def get_current_user(request: Request) -> dict:
             role_value = item[len("role:"):].strip()
             role_parts = role_value.split(":")
 
-            # Recognise only the application roles from our Keycloak client.
+          
             if len(role_parts) >= 2 and role_parts[-2] == "Features_Selector":
                 role_name = role_parts[-1]
                 if role_name in {"main_admin", "app_admin", "users"}:
@@ -99,7 +88,6 @@ def get_current_user(request: Request) -> dict:
                 roles.add(role_value)
             continue
 
-        # Keep only actual Keycloak group paths for project-level checks.
         if item.startswith("/"):
             normalized_path = "/" + "/".join(
                 part for part in item.strip("/").split("/") if part
@@ -107,8 +95,7 @@ def get_current_user(request: Request) -> dict:
             if normalized_path not in project_groups:
                 project_groups.append(normalized_path)
 
-        # Backward compatibility if a deployment sends root group names
-        # instead of client roles.
+ 
         normalized_group = item.strip("/")
         if normalized_group in {"main_admin", "app_admin", "users"}:
             roles.add(normalized_group)
@@ -472,6 +459,208 @@ def _remove_parent_dependencies(db: Session, project_id: str, entity_type: str, 
 
 
 
+VOTE_SPLIT_STRATEGIES = {"equal", "proportional"}
+
+
+def _validate_strategy(strategy: str) -> str:
+    if strategy not in VOTE_SPLIT_STRATEGIES:
+        raise HTTPException(
+            status_code=422,
+            detail="strategy must be 'equal' or 'proportional'",
+        )
+    return strategy
+
+
+def _split_amount(total: int, weights: list) -> list[int]:
+    """Split an integer into len(weights) integer shares that always sum to
+    `total` (largest-remainder method). Falls back to an equal split when all
+    weights are zero."""
+    n = len(weights)
+    weight_sum = sum(weights)
+    if weight_sum <= 0:
+        weights, weight_sum = [1] * n, n
+    raw = [total * w / weight_sum for w in weights]
+    shares = [int(r) for r in raw]
+    leftover = total - sum(shares)
+    order = sorted(range(n), key=lambda i: (-(raw[i] - shares[i]), i))
+    for i in order[:leftover]:
+        shares[i] += 1
+    return shares
+
+
+def _credit_feature(db: Session, response_id: str, feature_id: str, amount: int) -> None:
+    existing = db.query(Allocation).filter(
+        Allocation.response_id == response_id,
+        Allocation.feature_id == feature_id,
+        Allocation.group_id.is_(None),
+    ).first()
+    if existing:
+        existing.percentage += amount
+    else:
+        db.add(Allocation(
+            id=new_id(),
+            response_id=response_id,
+            feature_id=feature_id,
+            group_id=None,
+            percentage=amount,
+        ))
+
+
+def _release_group_votes(
+    db: Session,
+    group: FeatureGroup,
+    leaving: list,
+    strategy: str = "equal",
+) -> None:
+    """Move each leaving feature's share of every group-level vote onto the
+    feature itself. The group keeps the share that belongs to the members who
+    stay. Percentages per response keep summing to the same total."""
+    members = sorted(group.features, key=lambda f: (f.created_at, f.id))
+    if not members:
+        return
+    leaving_ids = {f.id for f in leaving}
+
+    if strategy == "proportional":
+        own = {m.id: 0 for m in members}
+        rows = db.query(Allocation).filter(
+            Allocation.feature_id.in_(list(own)),
+            Allocation.group_id.is_(None),
+        ).all()
+        for row in rows:
+            own[row.feature_id] += row.percentage
+        weights = [own[m.id] for m in members]
+    else:
+        weights = [1] * len(members)
+
+    group_rows = db.query(Allocation).filter(Allocation.group_id == group.id).all()
+    for alloc in group_rows:
+        shares = _split_amount(int(round(alloc.percentage)), weights)
+        kept = 0
+        for member, share in zip(members, shares):
+            if member.id in leaving_ids:
+                if share > 0:
+                    _credit_feature(db, alloc.response_id, member.id, share)
+            else:
+                kept += share
+        if kept > 0:
+            alloc.percentage = kept
+        else:
+            db.delete(alloc)
+    db.flush()
+
+
+def _remove_group_dependencies(db: Session, project_id: str, group_id: str) -> None:
+    db.query(FeatureDependency).filter(
+        FeatureDependency.project_id == project_id,
+        ((FeatureDependency.parent_type == "group") & (FeatureDependency.parent_id == group_id)) |
+        ((FeatureDependency.child_type == "group") & (FeatureDependency.child_id == group_id)),
+    ).delete(synchronize_session=False)
+
+
+def _ensure_no_feature_dependencies(db: Session, project_id: str, features: list) -> None:
+    """A feature that is a dependency parent/child would vanish from results
+    once it is placed inside a group, so block that instead of hiding it."""
+    ids = [f.id for f in features]
+    if not ids:
+        return
+    row = db.query(FeatureDependency).filter(
+        FeatureDependency.project_id == project_id,
+        ((FeatureDependency.parent_type == "feature") & FeatureDependency.parent_id.in_(ids)) |
+        ((FeatureDependency.child_type == "feature") & FeatureDependency.child_id.in_(ids)),
+    ).first()
+    if row:
+        raise HTTPException(
+            status_code=409,
+            detail="A selected feature has a dependency. Remove that dependency before grouping it.",
+        )
+
+
+
+BUNDLE_PARENT_KEEPS_SHARE = True  
+
+def _naive_utc(value):
+    if value is None:
+        return None
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _credit_group(db: Session, response_id: str, group_id: str, amount: int) -> None:
+    existing = db.query(Allocation).filter(
+        Allocation.response_id == response_id,
+        Allocation.group_id == group_id,
+    ).first()
+    if existing:
+        existing.percentage += amount
+    else:
+        db.add(Allocation(
+            id=new_id(),
+            response_id=response_id,
+            feature_id=None,
+            group_id=group_id,
+            percentage=amount,
+        ))
+
+
+def _split_bundle_votes(db: Session, project_id: str, parent_type: str, parent_id: str) -> None:
+    """Call BEFORE the parent's dependency links are deleted."""
+    edges = db.query(FeatureDependency).filter(
+        FeatureDependency.project_id == project_id,
+        FeatureDependency.parent_type == parent_type,
+        FeatureDependency.parent_id == parent_id,
+    ).order_by(FeatureDependency.created_at, FeatureDependency.id).all()
+    if not edges:
+        return
+
+    if parent_type == "group":
+        rows = db.query(Allocation).filter(Allocation.group_id == parent_id).all()
+    else:
+        rows = db.query(Allocation).filter(
+            Allocation.feature_id == parent_id,
+            Allocation.group_id.is_(None),
+        ).all()
+    if not rows:
+        return
+
+    response_ids = {row.response_id for row in rows}
+    responses = {
+        r.id: r for r in db.query(Response).filter(Response.id.in_(response_ids)).all()
+    }
+
+    for alloc in rows:
+        voted_at = _naive_utc(getattr(responses.get(alloc.response_id), "created_at", None))
+        if voted_at is None:
+            print("WARNING: response has no created_at; bundle votes not split for", alloc.response_id)
+            continue
+        eligible = [
+            e for e in edges
+            if _naive_utc(e.created_at) is not None and _naive_utc(e.created_at) <= voted_at
+        ]
+        if not eligible:
+            continue  # voted before any sub-item was attached
+        total = int(round(alloc.percentage))
+        parts = len(eligible) + (1 if BUNDLE_PARENT_KEEPS_SHARE else 0)
+        shares = _split_amount(total, [1] * parts)
+        if BUNDLE_PARENT_KEEPS_SHARE:
+            parent_share, child_shares = shares[0], shares[1:]
+        else:
+            parent_share, child_shares = 0, shares
+        for edge, share in zip(eligible, child_shares):
+            if share <= 0:
+                continue
+            if edge.child_type == "group":
+                _credit_group(db, alloc.response_id, edge.child_id, share)
+            else:
+                _credit_feature(db, alloc.response_id, edge.child_id, share)
+        if parent_share > 0:
+            alloc.percentage = parent_share
+        else:
+            db.delete(alloc)
+    db.flush()
+
+
+
 @app.get("/api/projects/{project_id}/feature-groups")
 def list_feature_groups(project_id: str, db: Session = Depends(get_db)):
     get_project_or_404(db, project_id)
@@ -513,6 +702,7 @@ def create_feature_group(
         raise HTTPException(status_code=400, detail="A selected feature already belongs to a group")
     if any(feature.status in {"implemented", "rejected"} for feature in selected):
         raise HTTPException(status_code=400, detail="Implemented or rejected features cannot be grouped")
+    _ensure_no_feature_dependencies(db, project_id, selected)
     group = FeatureGroup(
         id=new_id(),
         project_id=project_id,
@@ -604,6 +794,7 @@ def add_features_to_group(
             status_code=400,
             detail="Implemented or rejected features cannot be grouped",
         )
+    _ensure_no_feature_dependencies(db, project_id, features)
     try:
         for feature in features:
             feature.group_id = group.id
@@ -640,6 +831,8 @@ def rename_feature_group(
             group.implementation_started_at = None
             group.implemented_at = None
         group.status = body.status
+        if body.status == "implemented":
+            _split_bundle_votes(db, project_id, "group", group_id)
         if body.status in {"implemented", "rejected"}:
             _remove_parent_dependencies(db, project_id, "group", group_id)
             db.query(FeatureDependency).filter(
@@ -665,38 +858,58 @@ def ungroup_feature(
     project_id: str,
     group_id: str,
     feature_id: str,
+    strategy: str = Query("equal"),
     admin: dict = Depends(require_project_admin),
     db: Session = Depends(get_db),
 ):
+    _validate_strategy(strategy)
+    group = db.query(FeatureGroup).filter(FeatureGroup.id == group_id, FeatureGroup.project_id == project_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Feature group not found")
     feature = db.query(Feature).filter(Feature.id == feature_id, Feature.project_id == project_id, Feature.group_id == group_id).first()
     if not feature:
         raise HTTPException(status_code=404, detail="Feature not found in this group")
-    feature.group_id = None
-    db.commit()
-    return {"ok": True}
+    try:
+        # Hand the leaving feature its share of the group's votes first.
+        _release_group_votes(db, group, [feature], strategy)
+        feature.group_id = None
+        db.flush()
+        remaining = db.query(Feature).filter(Feature.group_id == group_id).count()
+        group_deleted = False
+        if remaining == 0:
+            # Every vote has already moved to the features, so the empty group is safe to remove.
+            _remove_group_dependencies(db, project_id, group_id)
+            db.delete(group)
+            group_deleted = True
+        db.commit()
+        return {"ok": True, "group_deleted": group_deleted}
+    except Exception:
+        db.rollback()
+        raise
 
 @app.delete("/api/projects/{project_id}/feature-groups/{group_id}")
 def delete_feature_group(
     project_id: str,
     group_id: str,
+    strategy: str = Query("equal"),
     admin: dict = Depends(require_project_admin),
     db: Session = Depends(get_db),
 ):
+    _validate_strategy(strategy)
     group = db.query(FeatureGroup).filter(FeatureGroup.id == group_id, FeatureGroup.project_id == project_id).first()
     if not group:
         raise HTTPException(status_code=404, detail="Feature group not found")
     try:
-      
+        members = list(group.features)
         group_votes = db.query(Allocation).filter(Allocation.group_id == group_id).count()
-        if group_votes:
-            raise HTTPException(status_code=409, detail="This group has voting history. Ungroup its features only after deciding how to preserve those votes.")
-        db.query(FeatureDependency).filter(
-            FeatureDependency.project_id == project_id,
-            ((FeatureDependency.parent_type == "group") & (FeatureDependency.parent_id == group_id)) |
-            ((FeatureDependency.child_type == "group") & (FeatureDependency.child_id == group_id)),
-        ).delete(synchronize_session=False)
-        for feature in group.features:
+        if group_votes and not members:
+            raise HTTPException(status_code=409, detail="This group has votes but no member features to receive them.")
+        # Move all group votes onto the members before the group disappears.
+        _release_group_votes(db, group, members, strategy)
+        _remove_group_dependencies(db, project_id, group_id)
+        for feature in members:
             feature.group_id = None
+        db.flush()
         db.delete(group)
         db.commit()
         return {"ok": True}
@@ -803,6 +1016,8 @@ def update_feature(
         else:
             feature.implementation_started_at = None
             feature.implemented_at = None
+    if new_status == "implemented":
+        _split_bundle_votes(db, project_id, "feature", feature_id)
     if new_status in {"implemented", "rejected"}:
         _remove_parent_dependencies(db, project_id, "feature", feature_id)
         db.query(FeatureDependency).filter(
@@ -927,8 +1142,7 @@ def get_results(project_id: str, db: Session = Depends(get_db)):
     dependency_child_keys = {(row.child_type, row.child_id) for row in dependency_rows}
     feature_by_id = {feature.id: feature for feature in project.features}
 
-    # Keep historical allocations for every feature/group, including dependency children.
-    # Grouping retains the existing rule: member allocations belong to their group.
+
     totals = {f"group:{group.id}": 0 for group in groups}
     contributors = {key: 0 for key in totals}
     for feature in project.features:

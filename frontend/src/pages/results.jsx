@@ -236,7 +236,7 @@ export default function Results() {
       if (percentageOperator !== "any" && threshold !== null && Number.isFinite(threshold)) {
         if (percentageOperator === "gt" && !(share > threshold)) return false;
         if (percentageOperator === "lt" && !(share < threshold)) return false;
-        if (percentageOperator === "eq" && Math.abs(share - threshold) > 0.05) return false;
+     
       }
 
       return true;
@@ -296,7 +296,7 @@ export default function Results() {
           >
             <StatCard
               icon={<InsightsRoundedIcon />}
-              label="Prioritization Items"
+              label="Prioritization Features"
               value={results.length}
               hint="Active and implemented features"
             />
@@ -356,7 +356,7 @@ export default function Results() {
                       <MenuItem value="any">Any percentage</MenuItem>
                       <MenuItem value="gt">Greater than (&gt;)</MenuItem>
                       <MenuItem value="lt">Less than (&lt;)</MenuItem>
-                      <MenuItem value="eq">Equal to (=)</MenuItem>
+                    
                     </Select>
                   </FormControl>
 
